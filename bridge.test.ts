@@ -112,6 +112,28 @@ test("missing bridge file schedules a reconnect without dialing", async () => {
   assert.equal(scheduled[0].ms, 1000);
 });
 
+test("a superseded socket's late close event is ignored", async () => {
+  const socks: Array<ReturnType<typeof fakeSocket>> = [];
+  const statuses: string[] = [];
+  const client = new BridgeClient({
+    readBridgeInfo: async () => ({ port: 1, token: "t", protocolVersion: 1 }),
+    connect: () => { const s = fakeSocket(); socks.push(s); return s; },
+    onStatus: (s) => statuses.push(s),
+    onFrame: () => {},
+    schedule: () => 1,
+    cancel: () => {},
+  });
+  await client.start();
+  const stale = socks[0];
+  client.stop();
+  await client.start(); // dials socket #2
+  socks[1].onOpen!();
+  socks[1].onMessage!(JSON.stringify({ type: "welcome", protocolVersion: 1 }));
+  assert.equal(statuses.at(-1), "connected");
+  stale.onClose!(); // the stopped socket's close event arrives late
+  assert.equal(statuses.at(-1), "connected"); // live connection untouched
+});
+
 test("reconnect backoff doubles and caps at 30s", async () => {
   const h = harness(null);
   await h.client.start(); // schedules #1 @ 1000

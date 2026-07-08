@@ -104,7 +104,8 @@ export class BridgeClient {
     this.socket = sock;
     sock.onOpen = () => sock.send(JSON.stringify(buildHello(info.token)));
     sock.onMessage = (data) => this.onMessage(data);
-    sock.onClose = () => this.onClose();
+    // Guarded — a superseded socket's late close event must not touch the live one.
+    sock.onClose = () => { if (this.socket === sock) this.onClose(); };
     sock.onError = () => { /* a close event always follows; reconnect handled there */ };
   }
 
