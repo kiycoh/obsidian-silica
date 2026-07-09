@@ -20,17 +20,28 @@ function makeApp(
   unresolved: Record<string, Record<string, number>> = {},
 ): RpcApp {
   const tfiles: Record<string, TFileLike> = {};
+  const folders = new Set<string>(); // folder paths that "exist" (created via createFolder)
   for (const path of Object.keys(files)) tfiles[path] = { path, basename: baseOf(path) };
   return {
     vault: {
       getMarkdownFiles: () => Object.values(tfiles),
       cachedRead: async (f) => files[f.path].content,
       getFileByPath: (p) => tfiles[p] ?? null,
+      getFolderByPath: (p) => (folders.has(p) ? { path: p } : null),
       create: async (path, content) => {
         if (files[path]) throw new Error(`already exists: ${path}`);
+        const slash = path.lastIndexOf("/");
+        const dir = slash > 0 ? path.slice(0, slash) : "";
+        // Mirror Obsidian: vault.create ENOENTs when the parent folder is absent.
+        if (dir && !folders.has(dir)) throw new Error(`ENOENT: no such file or directory, open '${path}'`);
         files[path] = { content };
         tfiles[path] = { path, basename: baseOf(path) };
         return tfiles[path];
+      },
+      createFolder: async (p) => {
+        if (folders.has(p)) throw new Error(`already exists: ${p}`);
+        const parts = p.split("/"); // recursive, like Obsidian's createFolder
+        for (let i = 1; i <= parts.length; i++) folders.add(parts.slice(0, i).join("/"));
       },
       process: async (f, fn) => (files[f.path].content = fn(files[f.path].content)),
     },
@@ -45,6 +56,10 @@ function makeApp(
     fileManager: {
       processFrontMatter: async (f, fn) => fn((files[f.path].frontmatter ??= {})),
       renameFile: async (f, to) => {
+        const slash = to.lastIndexOf("/");
+        const dir = slash > 0 ? to.slice(0, slash) : "";
+        // Mirror Obsidian: renameFile ENOENTs when the destination folder is absent.
+        if (dir && !folders.has(dir)) throw new Error(`ENOENT: no such file or directory, rename to '${to}'`);
         files[to] = files[f.path];
         tfiles[to] = { path: to, basename: baseOf(to) };
         delete files[f.path];
@@ -177,6 +192,22 @@ test("create round-trips a LaTeX/CRLF body verbatim (no escaping mangling)", asy
   assert.equal(read.size, body.length);
 });
 
+test("create makes the parent folder first (Obsidian vault.create ENOENTs otherwise)", async () => {
+  const files: Record<string, { content: string }> = {};
+  const app = makeApp(files);
+  // Exact bridge repro: ingest into a folder that doesn't exist yet. Without
+  // ensureFolder this ENOENTs and every note defers (cli_backend already mkdir -p's).
+  const r = await dispatchRpc(app, "create", { path: "Machine Learning/Random Variable.md", content: "body" }, idNorm);
+  assert.deepEqual(r, { name: "Random Variable", path: "Machine Learning/Random Variable.md" });
+  assert.equal(files["Machine Learning/Random Variable.md"].content, "body");
+  // A sibling reuses the now-existing folder (getFolderByPath short-circuits).
+  await dispatchRpc(app, "create", { path: "Machine Learning/Sibling.md", content: "y" }, idNorm);
+  assert.equal(files["Machine Learning/Sibling.md"].content, "y");
+  // Nested dirs get created recursively.
+  await dispatchRpc(app, "create", { path: "A/B/C/Deep.md", content: "x" }, idNorm);
+  assert.equal(files["A/B/C/Deep.md"].content, "x");
+});
+
 test("create round-trips a 1MB body (no 30KB special case)", async () => {
   const files: Record<string, { content: string }> = {};
   const app = makeApp(files);
@@ -210,6 +241,14 @@ test("move renames: dest readable, source gone", async () => {
   assert.deepEqual(await dispatchRpc(app, "move", { path: "A.md", to: "sub/B.md" }, idNorm), { ok: true });
   assert.equal((await dispatchRpc(app, "read", { path: "sub/B.md" }, idNorm) as { content: string }).content, "body");
   await assert.rejects(() => dispatchRpc(app, "read", { path: "A.md" }, idNorm), /file not found/);
+});
+
+test("move creates the destination folder first (renameFile ENOENTs otherwise)", async () => {
+  const app = makeApp({ "Note.md": { content: "body" } });
+  // Move into a not-yet-existing (nested) folder — same parent-ENOENT class as create.
+  assert.deepEqual(await dispatchRpc(app, "move", { path: "Note.md", to: "Archive/2026/Note.md" }, idNorm), { ok: true });
+  assert.equal((await dispatchRpc(app, "read", { path: "Archive/2026/Note.md" }, idNorm) as { content: string }).content, "body");
+  await assert.rejects(() => dispatchRpc(app, "read", { path: "Note.md" }, idNorm), /file not found/);
 });
 
 test("move param is `to` (not dest); missing source throws", async () => {

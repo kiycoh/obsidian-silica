@@ -28,7 +28,9 @@ export interface RpcApp {
     getMarkdownFiles(): TFileLike[];
     cachedRead(file: TFileLike): Promise<string>;
     getFileByPath(path: string): TFileLike | null;
+    getFolderByPath(path: string): unknown;
     create(path: string, content: string): Promise<TFileLike>;
+    createFolder(path: string): Promise<unknown>;
     process(file: TFileLike, fn: (data: string) => string): Promise<string>;
   };
   metadataCache: {
@@ -226,6 +228,21 @@ async function autolinkNote(app: RpcApp, path: string, candidatesRaw: unknown): 
   return added;
 }
 
+/** Obsidian's vault.create ENOENTs when the parent folder is missing — unlike
+ * fs_backend (Path.mkdir parents=True) and cli_backend (_ensure_dest_dir). Create
+ * it first, else every note ingested into a not-yet-existing dir gets deferred. */
+async function ensureFolder(app: RpcApp, filePath: string): Promise<void> {
+  const slash = filePath.lastIndexOf("/");
+  if (slash <= 0) return; // root-level note — no parent to create
+  const dir = filePath.slice(0, slash);
+  if (app.vault.getFolderByPath(dir)) return;
+  try {
+    await app.vault.createFolder(dir); // recursive in current Obsidian
+  } catch {
+    // Already exists (concurrent create / cache lag) — the postcondition holds.
+  }
+}
+
 const HANDLERS: Record<string, Handler> = {
   async read(app, p, norm) {
     const f = fileOrThrow(app, str(p.path), norm);
@@ -266,7 +283,9 @@ const HANDLERS: Record<string, Handler> = {
   // --- Writes (graph-safe) — the reply IS the settle (PROTOCOL §2.4) ---------
   async create(app, p, norm) {
     // vault.create throws if the path already exists — that IS the postcondition.
-    const f = await app.vault.create(norm(str(p.path)), str(p.content));
+    const path = norm(str(p.path));
+    await ensureFolder(app, path); // parent dir must exist first (see helper)
+    const f = await app.vault.create(path, str(p.content));
     return { name: f.basename, path: f.path };
   },
   async overwrite(app, p, norm) {
@@ -289,7 +308,9 @@ const HANDLERS: Record<string, Handler> = {
   },
   async move(app, p, norm) {
     const f = fileOrThrow(app, str(p.path), norm);
-    await app.fileManager.renameFile(f, norm(str(p.to))); // Obsidian rewrites incoming wikilinks
+    const to = norm(str(p.to));
+    await ensureFolder(app, to); // dest parent must exist first — renameFile ENOENTs otherwise
+    await app.fileManager.renameFile(f, to); // Obsidian rewrites incoming wikilinks
     return { ok: true };
   },
   async delete(app, p, norm) {
