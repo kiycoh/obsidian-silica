@@ -24,7 +24,8 @@ function makeApp(
   for (const path of Object.keys(files)) tfiles[path] = { path, basename: baseOf(path) };
   return {
     vault: {
-      getMarkdownFiles: () => Object.values(tfiles),
+      getMarkdownFiles: () => Object.values(tfiles).filter((f) => f.path.endsWith(".md")),
+      getFiles: () => Object.values(tfiles),
       cachedRead: async (f) => files[f.path].content,
       getFileByPath: (p) => tfiles[p] ?? null,
       getFolderByPath: (p) => (folders.has(p) ? { path: p } : null),
@@ -91,6 +92,15 @@ test("list_files filters by folder prefix", async () => {
   const sub = (await dispatchRpc(app, "list_files", { folder: "sub" }, idNorm)) as Array<{ name: string; path: string }>;
   assert.deepEqual(sub.map((r) => r.path).sort(), ["sub/B.md", "sub/C.md"]);
   assert.deepEqual(sub.map((r) => r.name).sort(), ["B", "C"]);
+});
+
+test("list_files all:true includes non-markdown files, name keeps extension", async () => {
+  const app = makeApp({ "Inbox/A.md": { content: "" }, "Inbox/doc.pdf": { content: "" } });
+  const md = (await dispatchRpc(app, "list_files", { folder: "Inbox" }, idNorm)) as Array<{ path: string }>;
+  assert.deepEqual(md.map((r) => r.path), ["Inbox/A.md"]);
+  const all = (await dispatchRpc(app, "list_files", { folder: "Inbox", all: true }, idNorm)) as Array<{ name: string; path: string }>;
+  assert.deepEqual(all.map((r) => r.path).sort(), ["Inbox/A.md", "Inbox/doc.pdf"]);
+  assert.deepEqual(all.map((r) => r.name).sort(), ["A", "doc.pdf"]);
 });
 
 test("props_of returns frontmatter, {} when none", async () => {

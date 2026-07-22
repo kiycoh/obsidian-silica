@@ -26,6 +26,7 @@ export interface FileCacheLike {
 export interface RpcApp {
   vault: {
     getMarkdownFiles(): TFileLike[];
+    getFiles(): TFileLike[];
     cachedRead(file: TFileLike): Promise<string>;
     getFileByPath(path: string): TFileLike | null;
     getFolderByPath(path: string): unknown;
@@ -252,10 +253,12 @@ const HANDLERS: Record<string, Handler> = {
   async list_files(app, p, norm) {
     const folder = str(p.folder ?? "");
     const prefix = folder ? norm(folder).replace(/\/+$/, "") + "/" : "";
-    return app.vault
-      .getMarkdownFiles()
+    // `all: true` includes non-markdown files (PDFs etc. awaiting /convert).
+    // Name keeps the extension for non-md so it never collides with a note name.
+    const files = p.all ? app.vault.getFiles() : app.vault.getMarkdownFiles();
+    return files
       .filter((f) => !prefix || f.path.startsWith(prefix))
-      .map((f) => ({ name: f.basename, path: f.path }));
+      .map((f) => ({ name: (f.path.split("/").pop() ?? f.basename).replace(/\.md$/, ""), path: f.path }));
   },
   async props_of(app, p, norm) {
     const f = fileOrThrow(app, str(p.path), norm);
