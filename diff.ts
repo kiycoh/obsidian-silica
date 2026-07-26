@@ -54,7 +54,10 @@ function changed(a: string[], b: string[]): DiffLine[] {
   let i = 0;
   let j = 0;
   while (i < n && j < m) {
-    if (a[i] === b[j]) out.push({ op: " ", text: a[i++] }), j++;
+    if (a[i] === b[j]) {
+      out.push({ op: " ", text: a[i++] });
+      j++;
+    }
     else if (lcs[(i + 1) * w + j] >= lcs[i * w + j + 1]) out.push({ op: "-", text: a[i++] }); // removals first
     else out.push({ op: "+", text: b[j++] });
   }

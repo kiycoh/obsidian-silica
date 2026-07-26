@@ -3,7 +3,7 @@
 // shared verbatim with the web GUI (PROTOCOL §Chat / callback.py::event_to_json),
 // so this mirrors the proven app.js handler.
 
-import type { Frame } from "./bridge.ts";
+import { str, type Frame } from "./bridge.ts";
 
 export interface ToolLine {
   id: string;
@@ -43,7 +43,7 @@ export function applyChatFrame(s: TurnState, frame: Frame): void {
   const ev = (frame.event ?? {}) as Record<string, unknown>;
   switch (String(ev.type)) {
     case "delta":
-      if (ev.kind === "text") s.text += String(ev.text ?? "");
+      if (ev.kind === "text") s.text += str(ev.text);
       return; // reasoning/reset ignored (same as app.js)
     case "tool_start":
       s.tools.push({ id: String(ev.id), label: String(ev.name), status: "run" });
@@ -55,7 +55,7 @@ export function applyChatFrame(s: TurnState, frame: Frame): void {
     }
     case "tool_error": {
       const t = s.tools.find((x) => x.id === String(ev.id));
-      if (t) { t.status = "error"; t.error = String(ev.error ?? ""); }
+      if (t) { t.status = "error"; t.error = str(ev.error); }
       return;
     }
     case "batch":

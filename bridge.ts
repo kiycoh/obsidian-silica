@@ -17,6 +17,16 @@ export interface BridgeInfo {
 
 export type Frame = { type: string; [k: string]: unknown };
 
+/** Coerce a value that arrived off the wire to a string. An object stringifies
+ * to "[object Object]", which as a path, a query or a vault name is worse than
+ * nothing: it looks like a real value and fails late. Empty string instead, so
+ * the caller's own emptiness check rejects it at the boundary. */
+export function str(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return "";
+}
+
 /** The subset of a browser/Electron `WebSocket` the client drives. */
 export interface SocketLike {
   send(data: string): void;
@@ -39,8 +49,10 @@ export interface BridgeDeps {
    * The token gates *access*; this gates *identity* — a defense-in-depth check
    * so a cross-vault bridge file can't drive writes into the wrong vault. */
   verifyWelcome?: (frame: Frame) => string | null;
-  schedule?: (fn: () => void, ms: number) => unknown;
-  cancel?: (handle: unknown) => void;
+  /** Injected, not defaulted: this module must stay free of an ambient timer so
+   * it runs unchanged under `node --test` and inside a popout window. */
+  schedule: (fn: () => void, ms: number) => unknown;
+  cancel: (handle: unknown) => void;
 }
 
 export function buildHello(token: string): Frame {
@@ -137,9 +149,9 @@ export class BridgeClient {
         }
         this.handshakeDone = true;
         this.backoff = BACKOFF_START_MS;
-        this.setStatus("connected", `vault: ${String(frame.vault ?? "")}`);
+        this.setStatus("connected", `vault: ${str(frame.vault)}`);
       } else if (frame.type === "bye") {
-        this.setStatus("disconnected", `refused: ${String(frame.reason ?? "")}`);
+        this.setStatus("disconnected", `refused: ${str(frame.reason)}`);
         this.closeSocket();
         this.scheduleReconnect();
       }
@@ -170,8 +182,7 @@ export class BridgeClient {
     if (this.stopped || this.reconnectHandle !== null) return;
     const ms = this.backoff;
     this.backoff = Math.min(this.backoff * 2, BACKOFF_MAX_MS);
-    const schedule = this.deps.schedule ?? ((fn, d) => setTimeout(fn, d));
-    this.reconnectHandle = schedule(() => {
+    this.reconnectHandle = this.deps.schedule(() => {
       this.reconnectHandle = null;
       void this.dial();
     }, ms);
@@ -179,8 +190,7 @@ export class BridgeClient {
 
   private cancelReconnect(): void {
     if (this.reconnectHandle === null) return;
-    const cancel = this.deps.cancel ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>));
-    cancel(this.reconnectHandle);
+    this.deps.cancel(this.reconnectHandle);
     this.reconnectHandle = null;
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "silica-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Bridge the Silica knowledge-graph agent to an Obsidian vault over a local WebSocket.",
   "scripts": {
     "dev": "node esbuild.config.mjs",

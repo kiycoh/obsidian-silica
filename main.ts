@@ -1,12 +1,12 @@
 import { App, ItemView, MarkdownRenderer, Plugin, PluginSettingTab, WorkspaceLeaf, normalizePath, type SettingDefinitionItem } from "obsidian";
 
-import { BridgeClient, type Frame, type SocketLike, type Status } from "./bridge.ts";
+import { BridgeClient, str, type BridgeInfo, type Frame, type SocketLike, type Status } from "./bridge.ts";
 import { applyChatFrame, emptyTurn, type TurnState } from "./chat.ts";
 import { diffLines, hunks, tally, type DiffLine } from "./diff.ts";
 import { dispatchRpc, RPC_METHODS, type Change, type RpcApp } from "./handlers.ts";
 
 const VIEW_TYPE = "silica-bridge-view";
-const BRIDGE_FILE = ".obsidian/silica-bridge.json";
+const BRIDGE_BASENAME = "silica-bridge.json";
 const MAX_CHANGED_FILES = 200; // a long /ingest run, not a memory leak
 const MAX_DIFF_LINES = 400; // per expanded file — a 5k-line overwrite must not stall the sidebar
 
@@ -24,7 +24,8 @@ export default class SilicaBridgePlugin extends Plugin {
   changes = new Map<string, Change>();
 
   async onload(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const saved = (await this.loadData()) as Partial<SilicaSettings> | null;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
     this.registerView(VIEW_TYPE, (leaf) => new BridgeView(leaf, this));
     this.addRibbonIcon("link", "Silica bridge", () => void this.activateView());
     this.addCommand({
@@ -46,20 +47,31 @@ export default class SilicaBridgePlugin extends Plugin {
     if (this.client) return;
     this.client = new BridgeClient({
       readBridgeInfo: async () => {
-        try {
-          const info = JSON.parse(await this.app.vault.adapter.read(BRIDGE_FILE));
+        // `configDir` is user-overridable, but the writer (`silica connect`, the
+        // Python side) targets a literal `.obsidian/`. Read the configured dir
+        // first so an override works the day the writer learns about it, then
+        // fall back to where the handshake file actually lands today.
+        for (const dir of new Set([this.app.vault.configDir, ".obsidian"])) {
+          let info: BridgeInfo;
+          try {
+            const raw = await this.app.vault.adapter.read(`${dir}/${BRIDGE_BASENAME}`);
+            info = JSON.parse(raw) as BridgeInfo;
+          } catch {
+            continue; // absent or unreadable — try the next location
+          }
           const override = this.settings.portOverride.trim();
-          if (override) info.port = Number(override);
-          return info;
-        } catch {
-          return null; // no session running yet
+          return override ? { ...info, port: Number(override) } : info;
         }
+        return null; // no session running yet
       },
       connect: (url) => wrapSocket(new WebSocket(url)),
+      // Popout windows get their own timer scope; `window` is the correct one.
+      schedule: (fn, ms) => window.setTimeout(fn, ms),
+      cancel: (handle) => window.clearTimeout(handle as number),
       // Defense-in-depth: refuse a bridge whose vault isn't this one, so a stray
       // silica-bridge.json can't make Silica reason over vault A and write to B.
       verifyWelcome: (frame) => {
-        const served = String(frame.vault ?? "");
+        const served = str(frame.vault);
         const mine = this.app.vault.getName();
         return served && served !== mine
           ? `bridge serves vault "${served}", not "${mine}" — run silica connect in this vault`
@@ -139,7 +151,7 @@ export default class SilicaBridgePlugin extends Plugin {
     const leaf: WorkspaceLeaf | null = existing.length ? existing[0] : workspace.getRightLeaf(false);
     if (!leaf) return;
     if (!existing.length) await leaf.setViewState({ type: VIEW_TYPE, active: true });
-    workspace.revealLeaf(leaf);
+    await workspace.revealLeaf(leaf);
   }
 
   refreshViews(): void {
@@ -420,7 +432,7 @@ class SilicaSettingTab extends PluginSettingTab {
 
   async setControlValue(key: string, value: unknown): Promise<void> {
     if (key === "portOverride") {
-      this.plugin.settings.portOverride = String(value ?? "");
+      this.plugin.settings.portOverride = str(value);
       await this.plugin.saveSettings();
     }
   }

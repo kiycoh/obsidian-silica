@@ -4,6 +4,8 @@
 // under `node --test` against a fake vault; main.ts passes the real Obsidian
 // `app` plus `normalizePath`.
 
+import { str } from "./bridge.ts";
+
 export interface TFileLike {
   path: string;
   basename: string;
@@ -72,9 +74,6 @@ interface SearchGroup {
   matches: Array<{ line: number; content: string }>;
 }
 
-function str(v: unknown): string {
-  return typeof v === "string" ? v : String(v ?? "");
-}
 
 function asStringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.map(str) : [];
@@ -117,14 +116,18 @@ async function sweepSearch(app: RpcApp, queries: string[]): Promise<Record<strin
  * body as a substring beginning at a word boundary. Direct port of
  * cli_backend._build_mention_index (the JS mirror of base.mentions_in). */
 async function buildMentionIndex(app: RpcApp, titles: string[]): Promise<Record<string, string[]>> {
-  const TERM = String.fromCharCode(0); // NUL sentinel — cannot appear in a title
-  // ponytail: char-trie typed as any — faithful port of the proven cli JS.
-  const trie: Record<string, any> = {};
+  // Title on the node itself rather than under a NUL key: same trie, but the
+  // children stay homogeneous so no branch needs an `any`.
+  interface TrieNode {
+    children: Record<string, TrieNode>;
+    title?: string;
+  }
+  const trie: TrieNode = { children: {} };
   for (const t of titles) {
     if (t.length < 2) continue;
     let node = trie;
-    for (const ch of t) node = node[ch] = node[ch] || {};
-    node[TERM] = t;
+    for (const ch of t) node = node.children[ch] ??= { children: {} };
+    node.title = t;
   }
   const isWord = (c: string) => (c >= "a" && c <= "z") || (c >= "0" && c <= "9");
   const mentions: Record<string, string[]> = {};
@@ -141,11 +144,11 @@ async function buildMentionIndex(app: RpcApp, titles: string[]): Promise<Record<
       for (let i = 0; i < n; i++) {
         if (!isWord(s[i])) continue;
         if (i && isWord(s[i - 1])) continue; // start walks at word boundaries only
-        let node = trie;
+        let node: TrieNode | undefined = trie;
         for (let j = i; j < n; j++) {
-          node = node[s[j]];
+          node = node.children[s[j]];
           if (node === undefined) break;
-          const t: string | undefined = node[TERM];
+          const t = node.title;
           if (t !== undefined && !seen.has(t)) {
             seen.add(t);
             (mentions[t] ??= []).push(file.path);
