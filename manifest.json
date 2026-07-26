@@ -1,9 +1,10 @@
 {
   "id": "silica-bridge",
   "name": "Silica Bridge",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "minAppVersion": "1.13.0",
   "description": "Chat with the Silica knowledge-graph agent and let it read and edit your vault, over a local (loopback-only) WebSocket bridge.",
   "author": "kiycoh",
+  "authorUrl": "https://github.com/kiycoh",
   "isDesktopOnly": true
 }

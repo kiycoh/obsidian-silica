@@ -1,0 +1,30 @@
+name: Release
+
+# Obsidian's community-plugin installer pulls main.js / manifest.json /
+# styles.css from the release assets of the tag named exactly after
+# manifest.json's version (no "v" prefix). Tag 0.1.0 -> release 0.1.0.
+on:
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - name: Fail if the tag and manifest version disagree
+        run: |
+          manifest=$(node -p "require('./manifest.json').version")
+          [ "$manifest" = "$GITHUB_REF_NAME" ] || {
+            echo "tag $GITHUB_REF_NAME != manifest $manifest"; exit 1; }
+      - run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --draft main.js manifest.json styles.css
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

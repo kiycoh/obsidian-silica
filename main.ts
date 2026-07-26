@@ -28,8 +28,8 @@ export default class SilicaBridgePlugin extends Plugin {
     this.registerView(VIEW_TYPE, (leaf) => new BridgeView(leaf, this));
     this.addRibbonIcon("link", "Silica bridge", () => void this.activateView());
     this.addCommand({
-      id: "open-silica-bridge",
-      name: "Open Silica bridge panel",
+      id: "open-panel", // Obsidian prefixes the plugin name; don't repeat it here.
+      name: "Open bridge panel",
       callback: () => void this.activateView(),
     });
     this.addSettingTab(new SilicaSettingTab(this.app, this));
@@ -217,7 +217,7 @@ class BridgeView extends ItemView {
     this.stopBtn.onclick = () => {
       if (this.turnId) this.plugin.client?.send({ type: "chat_cancel", turnId: this.turnId });
     };
-    this.inputEl.addEventListener("keydown", (e) => {
+    this.registerDomEvent(this.inputEl, "keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this.sendChat(); }
     });
     this.renderStatus();
