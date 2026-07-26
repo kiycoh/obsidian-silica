@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { dispatchRpc, RPC_METHODS, type FileCacheLike, type RpcApp, type TFileLike } from "./handlers.ts";
+import { dispatchRpc, RPC_METHODS, type Change, type FileCacheLike, type RpcApp, type TFileLike } from "./handlers.ts";
 
 interface FileSpec {
   content: string;
@@ -27,6 +27,7 @@ function makeApp(
       getMarkdownFiles: () => Object.values(tfiles).filter((f) => f.path.endsWith(".md")),
       getFiles: () => Object.values(tfiles),
       cachedRead: async (f) => files[f.path].content,
+      read: async (f) => files[f.path].content,
       getFileByPath: (p) => tfiles[p] ?? null,
       getFolderByPath: (p) => (folders.has(p) ? { path: p } : null),
       create: async (path, content) => {
@@ -321,4 +322,73 @@ test("autolink_note empty candidates → no links", async () => {
   const app = makeApp({ "N.md": { content: "mentions Beta" }, "Beta.md": { content: "" } });
   const added = await dispatchRpc(app, "autolink_note", { path: "N.md", candidates: [] }, idNorm);
   assert.deepEqual(added, []);
+});
+
+// --- change sink (feeds the changes panel) -----------------------------------
+
+/** Collect what a dispatch reported, so the panel's input is asserted directly. */
+function sink(): { seen: Change[]; fn: (c: Change) => void } {
+  const seen: Change[] = [];
+  return { seen, fn: (c) => seen.push(c) };
+}
+
+test("append reports the bytes it replaced, captured inside the atomic write", async () => {
+  const app = makeApp({ "A.md": { content: "one\ntwo" } });
+  const s = sink();
+  await dispatchRpc(app, "append", { path: "A.md", content: "\nthree" }, idNorm, s.fn);
+  assert.deepEqual(s.seen, [{ path: "A.md", kind: "modify", before: "one\ntwo", after: "one\ntwo\nthree" }]);
+});
+
+test("overwrite reports the old body, not the new one twice", async () => {
+  const app = makeApp({ "A.md": { content: "old" } });
+  const s = sink();
+  await dispatchRpc(app, "overwrite", { path: "A.md", content: "new" }, idNorm, s.fn);
+  assert.deepEqual(s.seen, [{ path: "A.md", kind: "modify", before: "old", after: "new" }]);
+});
+
+test("create reports an empty baseline; delete reports an empty head", async () => {
+  const app = makeApp({ "Gone.md": { content: "bye" } });
+  const s = sink();
+  await dispatchRpc(app, "create", { path: "New.md", content: "hi" }, idNorm, s.fn);
+  await dispatchRpc(app, "delete", { path: "Gone.md" }, idNorm, s.fn);
+  assert.deepEqual(s.seen, [
+    { path: "New.md", kind: "create", before: "", after: "hi" },
+    { path: "Gone.md", kind: "delete", before: "bye", after: "" },
+  ]);
+});
+
+test("move reports a rename with its origin and no content", async () => {
+  const app = makeApp({ "A.md": { content: "body" } });
+  const s = sink();
+  await dispatchRpc(app, "move", { path: "A.md", to: "B.md" }, idNorm, s.fn);
+  assert.deepEqual(s.seen, [{ path: "B.md", kind: "rename", before: "", after: "", from: "A.md" }]);
+});
+
+test("set_prop reports the file around processFrontMatter", async () => {
+  const app = makeApp({ "A.md": { content: "body", frontmatter: {} } });
+  const s = sink();
+  await dispatchRpc(app, "set_prop", { path: "A.md", name: "tags", value: ["x"] }, idNorm, s.fn);
+  assert.equal(s.seen.length, 1);
+  assert.deepEqual({ path: s.seen[0].path, kind: s.seen[0].kind }, { path: "A.md", kind: "modify" });
+  // The fake's processFrontMatter keeps the property block out of the body, so the
+  // before/after text matches here; against real Obsidian it is the rewritten note.
+});
+
+test("autolink_note reports only when it actually linked something", async () => {
+  const app = makeApp({ "N.md": { content: "about Beta" }, "Beta.md": { content: "" } });
+  const s = sink();
+  await dispatchRpc(app, "autolink_note", { path: "N.md", candidates: [] }, idNorm, s.fn);
+  assert.deepEqual(s.seen, []); // no candidates → no write to show
+  await dispatchRpc(app, "autolink_note", { path: "N.md", candidates: ["Beta"] }, idNorm, s.fn);
+  assert.deepEqual(s.seen, [{ path: "N.md", kind: "modify", before: "about Beta", after: "about [[Beta]]" }]);
+});
+
+test("reads report nothing, and the sink stays optional", async () => {
+  const app = makeApp({ "A.md": { content: "x" } });
+  const s = sink();
+  await dispatchRpc(app, "read", { path: "A.md" }, idNorm, s.fn);
+  await dispatchRpc(app, "outline", { path: "A.md" }, idNorm, s.fn);
+  assert.deepEqual(s.seen, []);
+  await dispatchRpc(app, "append", { path: "A.md", content: "y" }, idNorm); // no sink → no throw
+  assert.equal((await dispatchRpc(app, "read", { path: "A.md" }, idNorm) as { content: string }).content, "xy");
 });

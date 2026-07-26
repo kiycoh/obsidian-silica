@@ -23,11 +23,25 @@ export interface FileCacheLike {
   frontmatterPosition?: Pos;
 }
 
+/** One vault mutation, reported to the changes panel. `before`/`after` are the
+ * whole file on each side — the view does the diffing. A rename carries no
+ * content (Obsidian only moves the file) and names its origin in `from`. */
+export interface Change {
+  path: string;
+  kind: "create" | "modify" | "delete" | "rename";
+  before: string;
+  after: string;
+  from?: string;
+}
+
+export type WriteSink = (c: Change) => void;
+
 export interface RpcApp {
   vault: {
     getMarkdownFiles(): TFileLike[];
     getFiles(): TFileLike[];
     cachedRead(file: TFileLike): Promise<string>;
+    read(file: TFileLike): Promise<string>;
     getFileByPath(path: string): TFileLike | null;
     getFolderByPath(path: string): unknown;
     create(path: string, content: string): Promise<TFileLike>;
@@ -50,7 +64,7 @@ export interface RpcApp {
 
 type Params = Record<string, unknown>;
 type Normalize = (p: string) => string;
-type Handler = (app: RpcApp, p: Params, norm: Normalize) => Promise<unknown>;
+type Handler = (app: RpcApp, p: Params, norm: Normalize, note: WriteSink) => Promise<unknown>;
 
 interface SearchGroup {
   path: string;
@@ -157,7 +171,12 @@ function allVaultTitles(app: RpcApp): string[] {
  * sections, frontmatter, existing links/embeds/headings) plus inline-code/math
  * regexes; match resolvable titles longest-first at word boundaries; wrap via
  * generateMarkdownLink; one atomic vault.process. Returns titles actually linked. */
-async function autolinkNote(app: RpcApp, path: string, candidatesRaw: unknown): Promise<string[]> {
+async function autolinkNote(
+  app: RpcApp,
+  path: string,
+  candidatesRaw: unknown,
+  note: WriteSink,
+): Promise<string[]> {
   const file = app.vault.getFileByPath(path);
   if (!file) return []; // faithful: missing file → no links (JS returns {added: []})
   const selfLower = file.basename.toLowerCase();
@@ -179,8 +198,11 @@ async function autolinkNote(app: RpcApp, path: string, candidatesRaw: unknown): 
 
   const titles = candidates.filter((t) => t.length >= 2).sort((a, b) => b.length - a.length);
   const added: string[] = [];
+  let before = "";
+  let after = "";
 
   await app.vault.process(file, (cur) => {
+    before = cur;
     let body = cur;
     const mask = new Array<boolean>(body.length).fill(false);
     const markPos = (p?: Pos) => {
@@ -224,8 +246,10 @@ async function autolinkNote(app: RpcApp, path: string, candidatesRaw: unknown): 
       added.push(title);
       linked.add(tl);
     }
+    after = body;
     return body;
   });
+  if (added.length) note({ path: file.path, kind: "modify", before, after });
   return added;
 }
 
@@ -284,45 +308,65 @@ const HANDLERS: Record<string, Handler> = {
   },
 
   // --- Writes (graph-safe) — the reply IS the settle (PROTOCOL §2.4) ---------
-  async create(app, p, norm) {
+  // Each write reports its own before/after to `note`. The snapshots come from
+  // inside the atomic vault.process callback where one exists, so the panel shows
+  // the bytes the write actually replaced — never a racy read-back.
+  async create(app, p, norm, note) {
     // vault.create throws if the path already exists — that IS the postcondition.
     const path = norm(str(p.path));
     await ensureFolder(app, path); // parent dir must exist first (see helper)
-    const f = await app.vault.create(path, str(p.content));
+    const content = str(p.content);
+    const f = await app.vault.create(path, content);
+    note({ path: f.path, kind: "create", before: "", after: content });
     return { name: f.basename, path: f.path };
   },
-  async overwrite(app, p, norm) {
+  async overwrite(app, p, norm, note) {
     const f = fileOrThrow(app, str(p.path), norm);
-    await app.vault.process(f, () => str(p.content)); // in place — history/block-refs kept
+    const after = str(p.content);
+    let before = "";
+    await app.vault.process(f, (cur) => { before = cur; return after; }); // in place — history/block-refs kept
+    note({ path: f.path, kind: "modify", before, after });
     return { ok: true };
   },
-  async append(app, p, norm) {
+  async append(app, p, norm, note) {
     const f = fileOrThrow(app, str(p.path), norm);
-    await app.vault.process(f, (cur) => cur + str(p.content));
+    let before = "";
+    let after = "";
+    await app.vault.process(f, (cur) => { before = cur; after = cur + str(p.content); return after; });
+    note({ path: f.path, kind: "modify", before, after });
     return { ok: true };
   },
-  async set_prop(app, p, norm) {
+  async set_prop(app, p, norm, note) {
     const f = fileOrThrow(app, str(p.path), norm);
     const name = str(p.name);
+    // The only write whose new text we can't see: processFrontMatter serialises
+    // the property block itself, so bracket it with reads (uncached after, the
+    // cache still holds the pre-write body) rather than guess at its YAML.
+    const before = await app.vault.cachedRead(f);
     // `type` governs only the CLI fallback (cli_backend); the eval path takes
     // value as-is (already JSON-typed by ws_backend). Deliberately ignored here.
     await app.fileManager.processFrontMatter(f, (fm) => { fm[name] = p.value; });
+    note({ path: f.path, kind: "modify", before, after: await app.vault.read(f) });
     return { ok: true };
   },
-  async move(app, p, norm) {
+  async move(app, p, norm, note) {
     const f = fileOrThrow(app, str(p.path), norm);
     const to = norm(str(p.to));
+    const from = f.path;
     await ensureFolder(app, to); // dest parent must exist first — renameFile ENOENTs otherwise
     await app.fileManager.renameFile(f, to); // Obsidian rewrites incoming wikilinks
+    note({ path: to, kind: "rename", before: "", after: "", from });
     return { ok: true };
   },
-  async delete(app, p, norm) {
+  async delete(app, p, norm, note) {
     const f = fileOrThrow(app, str(p.path), norm);
+    const before = await app.vault.cachedRead(f); // last look before it goes to trash
     await app.fileManager.trashFile(f); // recoverable, not vault.delete
+    note({ path: f.path, kind: "delete", before, after: "" });
     return { ok: true };
   },
-  async autolink_note(app, p, norm) {
-    return autolinkNote(app, norm(str(p.path)), p.candidates);
+  async autolink_note(app, p, norm, note) {
+    return autolinkNote(app, norm(str(p.path)), p.candidates, note);
   },
 };
 
@@ -334,8 +378,9 @@ export async function dispatchRpc(
   method: string,
   params: Params,
   normalize: Normalize,
+  onWrite: WriteSink = () => {},
 ): Promise<unknown> {
   const h = HANDLERS[method];
   if (!h) throw new Error(`unknown method: ${method}`);
-  return h(app, params, normalize);
+  return h(app, params, normalize, onWrite);
 }

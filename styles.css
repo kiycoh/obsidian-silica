@@ -18,3 +18,61 @@
 
 .silica-input-row { display: flex; gap: var(--size-4-2); align-items: flex-end; }
 .silica-input-row textarea { flex: 1; resize: vertical; min-height: 2.4em; }
+
+/* Changed-files list + inline diff. Capped height so it never squeezes the log;
+   the fallback triplets keep the +/− blocks readable if a theme drops the vars. */
+.silica-changes {
+  display: flex; flex-direction: column; max-height: 45%; overflow-y: auto;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.silica-changes-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--size-4-2);
+  padding: var(--size-4-1) 0; font-size: var(--font-ui-smaller); color: var(--text-muted);
+  position: sticky; top: 0; background: var(--background-secondary); z-index: 1;
+}
+.silica-changes-head button {
+  background: none; box-shadow: none; border: none; padding: 0 var(--size-4-1);
+  font-size: var(--font-ui-smaller); color: var(--text-muted); cursor: pointer;
+}
+.silica-changes-head button:hover { color: var(--text-normal); }
+.silica-changes-list { display: flex; flex-direction: column; }
+
+.silica-change { display: flex; align-items: center; gap: var(--size-4-1); }
+.silica-change-toggle {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--size-4-2);
+  background: none; box-shadow: none; border: none; padding: 2px var(--size-4-1);
+  font-size: var(--font-ui-smaller); text-align: left; cursor: pointer; color: var(--text-normal);
+}
+.silica-change-toggle:hover:not(:disabled) { background: var(--background-modifier-hover); }
+.silica-change-toggle:disabled { cursor: default; opacity: 1; }
+.silica-change-path {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left; /* keep the filename visible when the path is long */
+}
+.silica-kind { flex: none; width: 1em; font-family: var(--font-monospace); font-weight: 600; }
+.silica-kind-create { color: var(--text-success); }
+.silica-kind-modify { color: var(--text-accent); }
+.silica-kind-delete, .silica-kind-rename { color: var(--text-muted); }
+.silica-plus, .silica-minus { flex: none; font-family: var(--font-monospace); font-size: var(--font-ui-smaller); }
+.silica-plus { color: rgb(var(--color-green-rgb, 68, 207, 110)); }
+.silica-minus { color: rgb(var(--color-red-rgb, 233, 49, 71)); }
+.silica-change-open {
+  flex: none; background: none; box-shadow: none; border: none; padding: 0 var(--size-4-1);
+  color: var(--text-muted); cursor: pointer;
+}
+.silica-change-open:hover:not(:disabled) { color: var(--text-normal); }
+
+.silica-diff {
+  overflow-x: auto; margin: var(--size-4-1) 0 var(--size-4-2) var(--size-4-3);
+  border-left: 2px solid var(--background-modifier-border);
+  font-family: var(--font-monospace); font-size: var(--font-smaller); line-height: 1.45;
+}
+.silica-diff-track { width: max-content; min-width: 100%; }
+.silica-diff-line { white-space: pre; padding: 0 var(--size-4-2); min-height: 1.45em; }
+.silica-diff-add { background: rgba(var(--color-green-rgb, 68, 207, 110), 0.16); color: var(--text-normal); }
+.silica-diff-del { background: rgba(var(--color-red-rgb, 233, 49, 71), 0.16); color: var(--text-normal); }
+.silica-diff-ctx { color: var(--text-muted); }
+.silica-diff-gap {
+  padding: 0 var(--size-4-2); color: var(--text-faint);
+  background: var(--background-modifier-hover); white-space: pre;
+}

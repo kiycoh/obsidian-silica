@@ -22,6 +22,12 @@ Feature-complete for v1:
   (`create`/`overwrite`/`append`/`set_prop`/`move`/`delete`/`autolink_note`).
 - Chat panel: message log + input over the bridge's chat channel; assistant
   replies rendered as markdown (clickable wikilinks).
+- Changes panel: every write Silica makes lands in a source-control-style list of
+  changed files (`A`/`M`/`D`/`R` plus `+`/`−` counts), each expanding into a
+  green/red line diff of that note. Writes driven from the terminal show up too —
+  the list belongs to the session, not to a chat turn. Purely plugin-side: the
+  before/after snapshots come from inside each write, so the wire contract is
+  unchanged.
 
 The wire contract is `PROTOCOL.md` (kept in lockstep with the Python side).
 

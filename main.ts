@@ -2,10 +2,13 @@ import { App, ItemView, MarkdownRenderer, Plugin, PluginSettingTab, WorkspaceLea
 
 import { BridgeClient, type Frame, type SocketLike, type Status } from "./bridge.ts";
 import { applyChatFrame, emptyTurn, type TurnState } from "./chat.ts";
-import { dispatchRpc, RPC_METHODS, type RpcApp } from "./handlers.ts";
+import { diffLines, hunks, tally, type DiffLine } from "./diff.ts";
+import { dispatchRpc, RPC_METHODS, type Change, type RpcApp } from "./handlers.ts";
 
 const VIEW_TYPE = "silica-bridge-view";
 const BRIDGE_FILE = ".obsidian/silica-bridge.json";
+const MAX_CHANGED_FILES = 200; // a long /ingest run, not a memory leak
+const MAX_DIFF_LINES = 400; // per expanded file — a 5k-line overwrite must not stall the sidebar
 
 interface SilicaSettings {
   portOverride: string;
@@ -17,6 +20,8 @@ export default class SilicaBridgePlugin extends Plugin {
   client: BridgeClient | null = null;
   status: Status = "disconnected";
   statusDetail = "";
+  /** What Silica has written this session, one row per file, insertion-ordered. */
+  changes = new Map<string, Change>();
 
   async onload(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -74,10 +79,39 @@ export default class SilicaBridgePlugin extends Plugin {
     if (frame.type === "rpc") return this.onRpc(frame, send);
     // Chat replies (chat_event/chat_done/chat_error) → the panel that owns the turn.
     if (typeof frame.type === "string" && frame.type.startsWith("chat_")) {
-      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-        if (leaf.view instanceof BridgeView) leaf.view.handleChatFrame(frame);
+      this.eachView((v) => v.handleChatFrame(frame));
+    }
+  }
+
+  /** Fold one write into the per-file change list, then repaint the panel. Kind is
+   * derived from the (baseline, head) pair rather than tracked, so a file written
+   * five times in one run still yields one honest row. */
+  noteChange(c: Change): void {
+    if (c.kind === "rename") {
+      // The row follows the file, so a note Silica wrote and then moved keeps its
+      // baseline instead of splitting into a phantom pair.
+      const prev = c.from ? this.changes.get(c.from) : undefined;
+      if (c.from) this.changes.delete(c.from);
+      this.changes.set(c.path, prev ? { ...prev, path: c.path, from: c.from } : c);
+    } else {
+      const prev = this.changes.get(c.path);
+      const before = prev ? prev.before : c.before;
+      // ponytail: an overwrite to "" therefore reads as a delete. The write path's
+      // min-snippet gate means it does not happen, and the diff is all-red anyway.
+      if (before === "" && c.after === "") this.changes.delete(c.path); // created, then gone
+      else {
+        const kind = before === "" ? "create" : c.after === "" ? "delete" : "modify";
+        this.changes.set(c.path, { ...c, before, kind, from: prev?.from });
       }
     }
+    // Map iterates in insertion order and `set` on an existing key keeps its slot,
+    // so rows stay put during a run and the cap drops the oldest file first.
+    while (this.changes.size > MAX_CHANGED_FILES) {
+      const oldest = this.changes.keys().next().value;
+      if (oldest === undefined) break;
+      this.changes.delete(oldest);
+    }
+    this.eachView((v) => v.renderChanges());
   }
 
   // RPC dispatch (phases 3–4): allowlist → typed read/write handlers. An unknown
@@ -94,7 +128,7 @@ export default class SilicaBridgePlugin extends Plugin {
     // narrower than Obsidian's TAbstractFile, so a direct cast can't prove the
     // contravariant param match. Runtime App satisfies RpcApp — the mock proves
     // the shape headlessly in handlers.test.ts.
-    dispatchRpc(this.app as unknown as RpcApp, method, params, normalizePath)
+    dispatchRpc(this.app as unknown as RpcApp, method, params, normalizePath, (c) => this.noteChange(c))
       .then((result) => send({ type: "rpc_result", id, result }))
       .catch((e: unknown) => send({ type: "rpc_error", id, error: e instanceof Error ? e.message : String(e) }));
   }
@@ -109,8 +143,12 @@ export default class SilicaBridgePlugin extends Plugin {
   }
 
   refreshViews(): void {
+    this.eachView((v) => v.renderStatus());
+  }
+
+  private eachView(fn: (v: BridgeView) => void): void {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof BridgeView) leaf.view.renderStatus();
+      if (leaf.view instanceof BridgeView) fn(leaf.view);
     }
   }
 
@@ -146,6 +184,11 @@ class BridgeView extends ItemView {
   private turn: TurnState | null = null;
   private bodyEl!: HTMLElement;
   private toolsEl!: HTMLElement;
+  private changesEl: HTMLElement | null = null;
+  private expanded = new Set<string>(); // paths whose diff is open — survives repaints
+  // Every write repaints the whole list, so the per-row diff is memoised. noteChange
+  // rebuilds the Change object on each write, which is exactly the invalidation.
+  private diffCache = new WeakMap<Change, DiffLine[]>();
 
   constructor(leaf: WorkspaceLeaf, plugin: SilicaBridgePlugin) {
     super(leaf);
@@ -163,6 +206,8 @@ class BridgeView extends ItemView {
     el.addClass("silica-bridge");
     this.statusEl = el.createEl("p", { cls: "silica-status" });
     this.logEl = el.createDiv({ cls: "silica-log" });
+    this.changesEl = el.createDiv({ cls: "silica-changes" });
+    this.renderChanges();
     const row = el.createDiv({ cls: "silica-input-row" });
     this.inputEl = row.createEl("textarea", { attr: { rows: "2", placeholder: "Message Silica…" } });
     this.sendBtn = row.createEl("button", { text: "Send" });
@@ -187,6 +232,91 @@ class BridgeView extends ItemView {
     const blocked = s !== "connected" || this.turnId !== null;
     this.inputEl.disabled = blocked;
     this.sendBtn.disabled = blocked;
+  }
+
+  /** Source-control shape: the list of files Silica wrote, each expanding into its
+   * own +/− diff. The store is the plugin's, not the turn's — a `/ingest` driven
+   * from the terminal writes over this same bridge with no chat turn to hang off. */
+  renderChanges(): void {
+    const el = this.changesEl;
+    if (!el) return; // a write can land before onOpen builds the DOM
+    const changes = [...this.plugin.changes.values()];
+    el.empty();
+    el.toggle(changes.length > 0);
+    if (!changes.length) return;
+
+    const head = el.createDiv({ cls: "silica-changes-head" });
+    head.createSpan({ text: `${changes.length} file${changes.length === 1 ? "" : "s"} changed` });
+    const clear = head.createEl("button", { text: "Clear", attr: { "aria-label": "Clear the change list" } });
+    clear.onclick = () => {
+      this.plugin.changes.clear();
+      this.expanded.clear();
+      this.renderChanges();
+    };
+
+    const list = el.createDiv({ cls: "silica-changes-list" });
+    for (const c of changes) this.renderChange(list, c);
+  }
+
+  private diffOf(c: Change): DiffLine[] {
+    let lines = this.diffCache.get(c);
+    if (!lines) this.diffCache.set(c, (lines = c.kind === "rename" ? [] : diffLines(c.before, c.after)));
+    return lines;
+  }
+
+  private renderChange(parent: HTMLElement, c: Change): void {
+    const lines = this.diffOf(c);
+    const { added, removed } = tally(lines);
+    const open = this.expanded.has(c.path);
+    const row = parent.createDiv({ cls: "silica-change" });
+
+    // A real button, not a clickable div: every row has to be keyboard reachable.
+    const toggle = row.createEl("button", { cls: "silica-change-toggle" });
+    toggle.setAttribute("aria-label", `${c.kind} ${c.path}, ${added} added, ${removed} removed`);
+    // Letter + colour + sign: the status never rides on colour alone.
+    toggle.createSpan({ cls: `silica-kind silica-kind-${c.kind}`, text: c.kind[0].toUpperCase() });
+    toggle.createSpan({ cls: "silica-change-path", text: c.from ? `${c.from} → ${c.path}` : c.path });
+    if (added) toggle.createSpan({ cls: "silica-plus", text: `+${added}` });
+    if (removed) toggle.createSpan({ cls: "silica-minus", text: `−${removed}` });
+    if (lines.length) {
+      toggle.setAttribute("aria-expanded", String(open));
+      toggle.onclick = () => {
+        if (open) this.expanded.delete(c.path);
+        else this.expanded.add(c.path);
+        this.renderChanges();
+      };
+    } else {
+      toggle.disabled = true; // a rename moved bytes, it did not change them
+    }
+
+    const reveal = row.createEl("button", { cls: "silica-change-open", text: "↗" });
+    reveal.setAttribute("aria-label", `Open ${c.path}`);
+    reveal.disabled = c.kind === "delete"; // in the trash — nothing to open
+    reveal.onclick = () => void this.app.workspace.openLinkText(c.path, "", false);
+
+    if (open && lines.length) this.renderDiff(parent, lines);
+  }
+
+  private renderDiff(parent: HTMLElement, lines: DiffLine[]): void {
+    const box = parent.createDiv({ cls: "silica-diff" });
+    // Inner track sized to the longest line, so a +/− block keeps its colour all
+    // the way across when the reader scrolls a long line sideways.
+    const track = box.createDiv({ cls: "silica-diff-track" });
+    const groups = hunks(lines);
+    const total = groups.reduce((n, g) => n + g.length, 0);
+    let budget = MAX_DIFF_LINES;
+    for (const g of groups) {
+      if (budget <= 0) break;
+      if (budget < MAX_DIFF_LINES) track.createDiv({ cls: "silica-diff-gap", text: "⋯" });
+      for (const l of g.slice(0, budget)) {
+        const cls = l.op === "+" ? "add" : l.op === "-" ? "del" : "ctx";
+        track.createDiv({ cls: `silica-diff-line silica-diff-${cls}`, text: `${l.op}${l.text}` });
+      }
+      budget -= g.length;
+    }
+    if (total > MAX_DIFF_LINES) {
+      track.createDiv({ cls: "silica-diff-gap", text: `⋯ ${total - MAX_DIFF_LINES} more lines — open the note for the rest` });
+    }
   }
 
   private bubble(role: "user" | "silica"): HTMLElement {
