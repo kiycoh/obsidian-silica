@@ -25,6 +25,9 @@ jobs:
           manifest=$(node -p "require('./manifest.json').version")
           [ "$manifest" = "$GITHUB_REF_NAME" ] || {
             echo "tag $GITHUB_REF_NAME != manifest $manifest"; exit 1; }
-      - run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --draft main.js manifest.json styles.css
+      # Published, not draft: the installer ignores drafts, and `gh release edit
+      # <tag>` cannot even reach one (that lookup resolves published tags only),
+      # so a draft just adds a manual step that fails in a confusing way.
+      - run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" main.js manifest.json styles.css
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
