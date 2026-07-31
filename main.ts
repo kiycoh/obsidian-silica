@@ -1,21 +1,24 @@
-import { App, ItemView, MarkdownRenderer, Plugin, PluginSettingTab, WorkspaceLeaf, normalizePath, type SettingDefinitionItem } from "obsidian";
+import { App, ItemView, MarkdownRenderer, Notice, Plugin, PluginSettingTab, WorkspaceLeaf, editorInfoField, normalizePath, type SettingDefinitionItem } from "obsidian";
+import type { EditorView } from "@codemirror/view";
 
 import { BridgeClient, str, type BridgeInfo, type Frame, type SocketLike, type Status } from "./bridge.ts";
 import { applyChatFrame, emptyTurn, type TurnState } from "./chat.ts";
-import { diffLines, hunks, tally, type DiffLine } from "./diff.ts";
-import { dispatchRpc, RPC_METHODS, type Change, type RpcApp } from "./handlers.ts";
+import { acceptInBaseline, diffLines, hunkRanges, hunks, rejectEdit, tally, type DiffLine, type Hunk } from "./diff.ts";
+import { refreshEditors, silicaDiff, type DiffHost } from "./editorDiff.ts";
+import { dispatchRpc, ensureFolder, RPC_METHODS, type Change, type RpcApp } from "./handlers.ts";
 
 const VIEW_TYPE = "silica-bridge-view";
 const BRIDGE_BASENAME = "silica-bridge.json";
 const MAX_CHANGED_FILES = 200; // a long /ingest run, not a memory leak
 const MAX_DIFF_LINES = 400; // per expanded file — a 5k-line overwrite must not stall the sidebar
+const CONFIRM_WINDOW = 5000; // ms an armed "Reject all" waits before standing down
 
 interface SilicaSettings {
   portOverride: string;
 }
 const DEFAULT_SETTINGS: SilicaSettings = { portOverride: "" };
 
-export default class SilicaBridgePlugin extends Plugin {
+export default class SilicaBridgePlugin extends Plugin implements DiffHost {
   settings: SilicaSettings = DEFAULT_SETTINGS;
   client: BridgeClient | null = null;
   status: Status = "disconnected";
@@ -27,6 +30,11 @@ export default class SilicaBridgePlugin extends Plugin {
     const saved = (await this.loadData()) as Partial<SilicaSettings> | null;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
     this.registerView(VIEW_TYPE, (leaf) => new BridgeView(leaf, this));
+    // Inline accept/reject blocks. The path lookup is passed in so editorDiff.ts
+    // stays free of Obsidian imports and can be exercised headlessly.
+    this.registerEditorExtension(
+      silicaDiff(this, (state) => state.field(editorInfoField, false)?.file?.path ?? null),
+    );
     this.addRibbonIcon("link", "Silica bridge", () => void this.activateView());
     this.addCommand({
       id: "open-panel", // Obsidian prefixes the plugin name; don't repeat it here.
@@ -123,7 +131,94 @@ export default class SilicaBridgePlugin extends Plugin {
       if (oldest === undefined) break;
       this.changes.delete(oldest);
     }
+    this.repaint();
+  }
+
+  /** Both surfaces read the same store, so both are redrawn together. */
+  private repaint(): void {
     this.eachView((v) => v.renderChanges());
+    refreshEditors();
+  }
+
+  // --- Inline review (DiffHost). The baseline `before` and the document as it
+  // stands are the whole state: blocks are recomputed from that pair, never
+  // tracked, so a reader's own edits need no bookkeeping.
+
+  hunksFor(path: string, doc: string): Hunk[] {
+    const c = this.changes.get(path);
+    // A rename moved bytes without changing them, a delete left no editor open.
+    return c && c.kind !== "rename" && c.kind !== "delete" ? hunkRanges(c.before, doc) : [];
+  }
+
+  /** Accept: the baseline takes the block, the document keeps the bytes it has. */
+  acceptHunk(path: string, hunk: Hunk, doc: string): void {
+    const c = this.changes.get(path);
+    if (c) this.settle(path, acceptInBaseline(c.before, hunk), doc);
+  }
+
+  /** Reject: one transaction, so Ctrl+Z brings Silica's version back. */
+  rejectHunk(path: string, hunk: Hunk, view: EditorView): void {
+    const c = this.changes.get(path);
+    if (!c) return;
+    view.dispatch({ changes: rejectEdit(view.state.doc.toString(), hunk) });
+    const doc = view.state.doc.toString();
+    // Last block of a file Silica created: the empty file itself has to follow.
+    if (c.kind === "create" && doc === "") void this.revertPaths([path]);
+    else this.settle(path, c.before, doc);
+  }
+
+  /** Fold a reviewed pair back into the row, dropping it once the two agree. */
+  private settle(path: string, before: string, after: string): void {
+    const c = this.changes.get(path);
+    if (!c) return;
+    if (before === after) this.changes.delete(path);
+    else this.changes.set(path, { ...c, before, after, kind: before === "" ? "create" : "modify" });
+    this.repaint();
+  }
+
+  /** Keep every write, forget the list. Nothing on disk moves. */
+  acceptAll(): void {
+    this.changes.clear();
+    this.repaint();
+  }
+
+  rejectAll(): Promise<void> {
+    return this.revertPaths([...this.changes.keys()]);
+  }
+
+  /** Put files back the way they were before Silica touched them. One repaint at
+   * the end: a 200-file revert must not rebuild the panel 200 times. */
+  private async revertPaths(paths: string[]): Promise<void> {
+    const { vault, fileManager } = this.app;
+    const rpc = this.app as unknown as RpcApp; // same narrowing as onRpc
+    for (const path of paths) {
+      const c = this.changes.get(path);
+      if (!c) continue;
+      this.changes.delete(path);
+      const file = vault.getFileByPath(path);
+      try {
+        if (c.kind === "create") {
+          if (file) await fileManager.trashFile(file);
+        } else if (c.kind === "delete") {
+          await ensureFolder(rpc, path);
+          if (file) await vault.process(file, () => c.before); // recreated meanwhile
+          else await vault.create(path, c.before);
+        } else if (c.kind === "rename") {
+          if (file && c.from) {
+            await ensureFolder(rpc, c.from);
+            await fileManager.renameFile(file, c.from);
+          }
+        } else if (file) {
+          // ponytail: `process` also drives a file that is open — Obsidian
+          // reloads the editor. The in-editor path uses a transaction instead,
+          // which is what keeps undo working there.
+          await vault.process(file, () => c.before);
+        }
+      } catch (e) {
+        new Notice(`Silica: could not revert ${path}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    this.repaint();
   }
 
   // RPC dispatch (phases 3–4): allowlist → typed read/write handlers. An unknown
@@ -198,6 +293,8 @@ class BridgeView extends ItemView {
   private toolsEl!: HTMLElement;
   private changesEl: HTMLElement | null = null;
   private expanded = new Set<string>(); // paths whose diff is open — survives repaints
+  private armed = false; // "Reject all" clicked once, waiting for the confirm
+  private confirmTimer = 0;
   // Every write repaints the whole list, so the per-row diff is memoised. noteChange
   // rebuilds the Change object on each write, which is exactly the invalidation.
   private diffCache = new WeakMap<Change, DiffLine[]>();
@@ -211,6 +308,7 @@ class BridgeView extends ItemView {
   getDisplayText(): string { return "Silica bridge"; }
   getIcon(): string { return "link"; }
   async onOpen(): Promise<void> { this.build(); }
+  async onClose(): Promise<void> { window.clearTimeout(this.confirmTimer); }
 
   private build(): void {
     const el = this.contentEl;
@@ -259,10 +357,34 @@ class BridgeView extends ItemView {
 
     const head = el.createDiv({ cls: "silica-changes-head" });
     head.createSpan({ text: `${changes.length} file${changes.length === 1 ? "" : "s"} changed` });
-    const clear = head.createEl("button", { text: "Clear", attr: { "aria-label": "Clear the change list" } });
-    clear.onclick = () => {
-      this.plugin.changes.clear();
+    const accept = head.createEl("button", {
+      text: "Accept all",
+      attr: { "aria-label": "Keep every change and empty the list" },
+    });
+    accept.onclick = () => {
       this.expanded.clear();
+      this.plugin.acceptAll();
+    };
+    // Two-step instead of a modal, and the armed state lives on the view so a
+    // write landing mid-window repaints the header without losing it.
+    const reject = head.createEl("button", {
+      cls: this.armed ? "silica-armed" : "",
+      text: this.armed ? "Sure?" : "Reject all",
+      attr: { "aria-label": this.armed ? "Confirm reverting every change" : "Revert every change Silica made" },
+    });
+    reject.onclick = () => {
+      window.clearTimeout(this.confirmTimer);
+      if (this.armed) {
+        this.armed = false;
+        this.expanded.clear();
+        void this.plugin.rejectAll();
+        return;
+      }
+      this.armed = true;
+      this.confirmTimer = window.setTimeout(() => {
+        this.armed = false;
+        this.renderChanges();
+      }, CONFIRM_WINDOW);
       this.renderChanges();
     };
 

@@ -80,6 +80,77 @@ export function hunks(lines: DiffLine[], context = 2): DiffLine[][] {
   return spans.map(([lo, hi]) => lines.slice(lo, hi));
 }
 
+/** One reviewable block: the lines it occupies on each side, and their text.
+ * Both ranges are end-exclusive line indices, so a pure insertion has an empty
+ * `before` range and a pure deletion an empty `after` one. */
+export interface Hunk {
+  beforeStart: number;
+  beforeEnd: number;
+  afterStart: number;
+  afterEnd: number;
+  removed: string[];
+  added: string[];
+}
+
+const split = (s: string): string[] => (s === "" ? [] : s.split("\n"));
+
+/** The same runs of change `hunks` groups, but carrying line coordinates, which
+ * is what accepting into the baseline and rejecting in the document both need. */
+export function hunkRanges(before: string, after: string): Hunk[] {
+  const out: Hunk[] = [];
+  let b = 0;
+  let a = 0;
+  let cur: Hunk | null = null;
+  for (const l of diffLines(before, after)) {
+    if (l.op === " ") {
+      cur = null;
+      b++;
+      a++;
+      continue;
+    }
+    if (!cur) {
+      cur = { beforeStart: b, beforeEnd: b, afterStart: a, afterEnd: a, removed: [], added: [] };
+      out.push(cur);
+    }
+    // A run may interleave `-` and `+`, but each side still advances
+    // contiguously, so one range per side covers the whole run.
+    if (l.op === "-") cur.beforeEnd = ++b, cur.removed.push(l.text);
+    else cur.afterEnd = ++a, cur.added.push(l.text);
+  }
+  return out;
+}
+
+/** Accept: the baseline absorbs the hunk, so the recomputed diff loses it while
+ * the document keeps exactly the bytes it already had. */
+export function acceptInBaseline(before: string, h: Hunk): string {
+  const lines = split(before);
+  lines.splice(h.beforeStart, h.beforeEnd - h.beforeStart, ...h.added);
+  return lines.join("\n");
+}
+
+/** Reject: the character range of the hunk's added lines in `after`, and the
+ * text that puts the removed lines back. Pure over a string so the newline
+ * bookkeeping at both ends of the file is checked by asserts, not by an editor. */
+export function rejectEdit(after: string, h: Hunk): { from: number; to: number; insert: string } {
+  const lines = split(after);
+  const offset = (i: number): number => {
+    let n = 0;
+    for (let k = 0; k < i; k++) n += lines[k].length + 1; // line plus its newline
+    return n;
+  };
+  const text = h.removed.join("\n");
+  // A hunk that stops short of the last line owns its trailing newlines, so the
+  // replacement carries them too.
+  if (h.afterEnd < lines.length) {
+    return { from: offset(h.afterStart), to: offset(h.afterEnd), insert: h.removed.map((t) => `${t}\n`).join("") };
+  }
+  // A hunk that runs to end of file has no trailing newline to own. Unless it
+  // starts the file, it takes over the newline that closes the line above,
+  // which is what keeps a rejected last line from being glued to it.
+  if (h.afterStart === 0) return { from: 0, to: after.length, insert: text };
+  return { from: offset(h.afterStart) - 1, to: after.length, insert: text ? `\n${text}` : "" };
+}
+
 export function tally(lines: DiffLine[]): { added: number; removed: number } {
   let added = 0;
   let removed = 0;

@@ -35,6 +35,7 @@
   font-size: var(--font-ui-smaller); color: var(--text-muted); cursor: pointer;
 }
 .silica-changes-head button:hover { color: var(--text-normal); }
+.silica-changes-head button.silica-armed { color: var(--text-error); font-weight: 600; }
 .silica-changes-list { display: flex; flex-direction: column; }
 
 .silica-change { display: flex; align-items: center; gap: var(--size-4-1); }
@@ -76,3 +77,35 @@
   padding: 0 var(--size-4-2); color: var(--text-faint);
   background: var(--background-modifier-hover); white-space: pre;
 }
+
+/* Inline review, inside the note. A left bar carries the same signal a gutter
+   mark would, without depending on the gutter being turned on at all. */
+.silica-cm-added {
+  background: rgba(var(--color-green-rgb, 68, 207, 110), 0.10);
+  box-shadow: inset 2px 0 0 rgb(var(--color-green-rgb, 68, 207, 110));
+}
+.silica-cm-hunk { margin: var(--size-4-1) 0; }
+/* A pure insertion carries only its toolbar; a block that really dropped lines
+   gets the red bar, so the two cases never look alike. */
+.silica-cm-hunk:has(.silica-cm-removed) {
+  border-left: 2px solid rgb(var(--color-red-rgb, 233, 49, 71));
+  background: rgba(var(--color-red-rgb, 233, 49, 71), 0.10);
+}
+.silica-cm-removed {
+  padding: 0 var(--size-4-2);
+  font-family: var(--font-monospace); font-size: var(--font-smaller); line-height: 1.45;
+  color: var(--text-muted); text-decoration: line-through; white-space: pre-wrap;
+}
+.silica-cm-bar {
+  display: flex; align-items: center; gap: var(--size-4-2);
+  padding: 2px var(--size-4-2); font-size: var(--font-ui-smaller);
+}
+.silica-cm-tag { flex: 1; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.06em; }
+.silica-cm-btn {
+  background: none; box-shadow: none; border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s); padding: 1px var(--size-4-2);
+  font-size: var(--font-ui-smaller); color: var(--text-muted); cursor: pointer;
+}
+.silica-cm-btn:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.silica-cm-accept:hover { border-color: rgb(var(--color-green-rgb, 68, 207, 110)); }
+.silica-cm-reject:hover { border-color: rgb(var(--color-red-rgb, 233, 49, 71)); }

@@ -1,9 +1,28 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { diffLines, hunks, tally, type DiffLine } from "./diff.ts";
+import { acceptInBaseline, diffLines, hunkRanges, hunks, rejectEdit, tally, type DiffLine, type Hunk } from "./diff.ts";
 
 const render = (lines: DiffLine[]) => lines.map((l) => l.op + l.text);
+
+const splice = (s: string, e: { from: number; to: number; insert: string }) =>
+  s.slice(0, e.from) + e.insert + s.slice(e.to);
+
+/** Every (before, after) shape the panel can hand the editor. */
+const PAIRS: Array<[string, string]> = [
+  ["a\nb\nc", "a\nB\nc"], // replace in the middle
+  ["a\nb\nc", "X\nb\nc"], // replace the first line
+  ["a\nb\nc", "a\nb\nZ"], // replace the last line
+  ["a\nb", "a\nb\nc"], // append at end of file
+  ["a\nb\nc", "a\nb"], // truncate at end of file
+  ["b\nc", "a\nb\nc"], // insert at start
+  ["a\nb\nc", "b\nc"], // delete at start
+  ["a\nb\nc\nd\ne", "A\nb\nc\nd\nE"], // two hunks, far apart
+  ["one", "two"], // whole file replaced
+  ["", "a\nb"], // created
+  ["a\nb", ""], // deleted
+  ["a\nb", "a\nb"], // untouched
+];
 
 test("unchanged text is all context", () => {
   assert.deepEqual(render(diffLines("a\nb", "a\nb")), [" a", " b"]);
@@ -48,6 +67,47 @@ test("adjacent edits merge into a single hunk", () => {
 
 test("tally counts the gutter, not the context", () => {
   assert.deepEqual(tally(diffLines("a\nb\nc", "a\nX\nY\nc")), { added: 2, removed: 1 });
+});
+
+test("hunkRanges reports the line span each block covers on both sides", () => {
+  // "b" becomes "B\nB2": one line out at 1, two lines in at 1.
+  assert.deepEqual(hunkRanges("a\nb\nc", "a\nB\nB2\nc"), [
+    { beforeStart: 1, beforeEnd: 2, afterStart: 1, afterEnd: 3, removed: ["b"], added: ["B", "B2"] },
+  ]);
+});
+
+test("a pure insertion has an empty baseline span, a pure deletion an empty document span", () => {
+  const [ins] = hunkRanges("a\nc", "a\nb\nc");
+  assert.equal(ins.beforeStart, ins.beforeEnd);
+  assert.deepEqual([ins.afterStart, ins.afterEnd, ins.added], [1, 2, ["b"]]);
+  const [del] = hunkRanges("a\nb\nc", "a\nc");
+  assert.equal(del.afterStart, del.afterEnd);
+  assert.deepEqual([del.beforeStart, del.beforeEnd, del.removed], [1, 2, ["b"]]);
+});
+
+// The two operations the review buttons are made of. Applied last hunk first,
+// so the ranges of the earlier ones stay valid against the untouched string.
+test("accepting every hunk moves the baseline onto the document", () => {
+  for (const [before, after] of PAIRS) {
+    const got = hunkRanges(before, after).reduceRight((b: string, h: Hunk) => acceptInBaseline(b, h), before);
+    assert.equal(got, after, `accept-all ${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
+  }
+});
+
+test("rejecting every hunk puts the document back to the baseline", () => {
+  for (const [before, after] of PAIRS) {
+    const got = hunkRanges(before, after).reduceRight((d: string, h: Hunk) => splice(d, rejectEdit(after, h)), after);
+    assert.equal(got, before, `reject-all ${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
+  }
+});
+
+test("rejecting one hunk of many leaves the others standing", () => {
+  const before = "a\nb\nc\nd\ne";
+  const after = "A\nb\nc\nd\nE";
+  const hs = hunkRanges(before, after);
+  assert.equal(hs.length, 2);
+  assert.equal(splice(after, rejectEdit(after, hs[1])), "A\nb\nc\nd\ne"); // last line back, first still changed
+  assert.equal(splice(after, rejectEdit(after, hs[0])), "a\nb\nc\nd\nE");
 });
 
 test("past the LCS cap the changed middle degrades to remove-then-add, never wrong", () => {
