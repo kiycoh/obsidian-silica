@@ -1,15 +1,71 @@
 # Silica Bridge
 
-Chat with the [Silica](https://github.com/kiycoh/silica-agent) knowledge-graph
-agent from a side panel, and let it read and edit your notes through Obsidian's
-own APIs. Every write lands in a source-control-style changes list with a
-per-file diff, so you see what the agent touched before you keep it.
+[Silica](https://github.com/kiycoh/silica-agent)'s mechanical algorithms, running
+on your vault with no model, no network and no configuration: a panel that tells
+you what the vault knows about the note in front of you and what is wrong with
+it, ranked search, bulk autolinking and a community graph. Plus a side panel that
+chats with the Silica agent when you have one running, and lets it read and edit
+your notes through Obsidian's own APIs. Every write, whoever made it, lands in a
+source-control-style changes list with a per-file diff, so you see what changed
+before you keep it.
 
 ![The bridge panel](https://raw.githubusercontent.com/kiycoh/obsidian-silica/main/assets/screenshot.png)
 
+## Offline
+
+These need nothing but the vault. They run on an index the plugin builds itself
+from your notes, kept current by mtime and never written to disk.
+
+- **Note panel**. Everything the vault has to say about the note you have open,
+  each note listed once under the sharpest thing there is to say about it:
+  - *Related*: Jaccard overlap of each note's top-30 stems, the CORRELATE metric
+    from Silica's ADR-0013. Backlinks answer "who linked here"; this answers "who
+    is about the same thing", which nobody had to link. A row marked `unlinked`
+    is one where the overlap clears the structural bar and no wikilink exists
+    either way.
+  - *Near-duplicates*: the same idea captured twice, found by Jaccard over whole
+    stem sets rather than the top 30, so two notes on one subject do not read as
+    copies of each other.
+  - *Orphans you could adopt*: notes nobody points at that overlap this one. An
+    orphan is invisible from itself, since you never open it; this is the surface
+    that can show you one.
+  - *Links without substance*: links written out of this note whose target shares
+    almost no vocabulary with it. Index notes are exempt.
+  - *Broken links*: link text that resolves to no file.
+- **Next**. The button at the top of the panel walks the whole vault worst-first,
+  one note per press, and says why each one is there. The four signals are fused
+  by rank, not by score, because a Jaccard and a count of broken links share no
+  scale. Nothing is remembered between presses: the signal is the state, so a
+  note you fix simply stops qualifying.
+- **Search by relevance**. BM25 over the same index, fused by rank with a title
+  match. Obsidian's own search is a boolean filter where every hit is equally
+  good; this one ranks. Each hit carries a line of context with the match
+  highlighted, and `path:folder/` anywhere in the query scopes it to one folder.
+- **Autolink this note** / **Autolink every note**. Injects wikilinks for vault
+  titles a note mentions but does not link, skipping frontmatter, code, math,
+  headings and existing links. The pass lands in the changes list, so it is
+  reviewed and revertable file by file.
+- **Community graph**. Louvain over the written links plus the inferred CORRELATE
+  edges, one hue per community, labelled with the stems that community has and
+  its neighbours do not.
+
+Except for autolink, which you ask for, none of this writes to your vault.
+
+Notes written from a template are what breaks this kind of tool: a vault of daily
+notes shares its scaffolding across every file, so a naive overlap relates all of
+them to all of them. Every proposal here is therefore gated on the overlap that
+survives dropping the stems more than a quarter of the vault carries. That kills
+the whole class in the algorithm, which is why there is no list of dismissed
+suggestions to maintain.
+
+None of these calls a language model, and the quality ceiling says so: the
+stemmer is a light suffix stripper for English and Italian rather than Snowball,
+the language is detected once per vault and then frozen, and the thresholds are
+starting points rather than measured optima.
+
 ## Requirements
 
-This plugin is a client. It does nothing on its own: it needs the Silica agent
+The chat panel below is a client: for that half you need the Silica agent
 running on the same machine.
 
 ```sh
@@ -24,15 +80,23 @@ the port and a per-session token. The plugin reads that file, connects, and show
 
 ## Network use
 
-The plugin opens a WebSocket to `127.0.0.1` (localhost) and nowhere else. It
-never contacts a remote host. It talks only to the `silica connect` process you
-started yourself, and no data leaves your machine through this plugin.
+The offline features open no connection at all. The chat panel opens a WebSocket
+to `127.0.0.1` (localhost) and nowhere else. It never contacts a remote host. It
+talks only to the `silica connect` process you started yourself, and no data
+leaves your machine through this plugin.
 
 The agent itself may call a language model, which can be a local one (Ollama, LM
 Studio, llama.cpp) or a hosted API. That choice is yours and it is configured on
 the Silica side, not here.
 
 ## Use
+
+The graph has its own ribbon icon. All of them are also buttons along the top of
+the bridge panel, and commands under *Silica Bridge* in the palette. The first one
+you run builds the index; after that a rebuild only re-reads the notes whose
+mtime moved, and a rebuild that finds nothing moved reuses the index whole.
+
+For the chat panel:
 
 1. Run `silica connect` in the vault.
 2. Open the panel: the ribbon icon, or *Silica Bridge: Open bridge panel* in the
@@ -59,7 +123,7 @@ terminal is reviewable in the same place.
 ```sh
 npm install
 npm run dev      # esbuild watch -> main.js
-npm test         # node --test, handshake and reconnect state machine
+npm test         # node --test: the four offline algorithms, plus the bridge state machine
 npm run build    # strict tsc typecheck + production bundle
 ```
 
