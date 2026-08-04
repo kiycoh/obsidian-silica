@@ -306,6 +306,38 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
     this.repaint();
   }
 
+  /** Put `text` back into a file, through the open editor when there is one.
+   *
+   * `vault.process` reaches disk, but an editor holding that file keeps its own
+   * document and writes it back on its next save, so a revert of an open note
+   * silently undid itself a second or two later. Measured: reject-all wrote the
+   * baseline (3352 chars), and the editor's save restored Silica's version
+   * (3356) with the changes list already empty. The editor is the authority
+   * whenever one exists; disk is only the authority when none does.
+   *
+   * One `replaceRange` per view, not `setValue`, so it lands as a single
+   * transaction and Ctrl+Z brings Silica's version back, matching what the
+   * per-hunk reject already does. */
+  private async restore(file: TFile, text: string): Promise<void> {
+    const views = this.app.workspace
+      .getLeavesOfType("markdown")
+      .map((leaf) => leaf.view)
+      .filter((v): v is MarkdownView => v instanceof MarkdownView && v.file?.path === file.path);
+    if (!views.length) {
+      await this.app.vault.process(file, () => text);
+      return;
+    }
+    for (const { editor } of views) {
+      // Panes on one file share a document, so the first write settles the rest;
+      // the others fall through this guard rather than stacking no-op transactions.
+      if (editor.getValue() === text) continue;
+      editor.replaceRange(text, { line: 0, ch: 0 }, editor.offsetToPos(editor.getValue().length));
+    }
+    // Flush now instead of waiting out the idle timer: a reader who rejects and
+    // quits within the second should still find the revert on disk.
+    await Promise.all(views.map((v) => v.save()));
+  }
+
   /** Keep every write, forget the list. Nothing on disk moves. */
   acceptAll(): void {
     this.changes.clear();
@@ -331,7 +363,7 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
           if (file) await fileManager.trashFile(file);
         } else if (c.kind === "delete") {
           await ensureFolder(rpc, path);
-          if (file) await vault.process(file, () => c.before); // recreated meanwhile
+          if (file) await this.restore(file, c.before); // recreated meanwhile
           else await vault.create(path, c.before);
         } else if (c.kind === "rename") {
           if (file && c.from) {
@@ -339,10 +371,7 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
             await fileManager.renameFile(file, c.from);
           }
         } else if (file) {
-          // ponytail: `process` also drives a file that is open — Obsidian
-          // reloads the editor. The in-editor path uses a transaction instead,
-          // which is what keeps undo working there.
-          await vault.process(file, () => c.before);
+          await this.restore(file, c.before);
         }
       } catch (e) {
         new Notice(`Silica: could not revert ${path}: ${e instanceof Error ? e.message : String(e)}`);
@@ -527,7 +556,14 @@ class BridgeView extends ItemView {
     const reject = head.createEl("button", {
       cls: this.armed ? "silica-armed" : "",
       text: this.armed ? "Sure?" : "Reject all",
-      attr: { "aria-label": this.armed ? "Confirm reverting every change" : "Revert every change Silica made" },
+      // Not "revert what Silica did": the baseline goes back whole, so edits a
+      // reader made after the write go with it. The per-hunk buttons are the
+      // surgical path; this one is the nuclear one and says so.
+      attr: {
+        "aria-label": this.armed
+          ? "Confirm restoring every touched file to its pre-Silica state"
+          : "Restore every touched file to how it was before Silica wrote, dropping your edits since",
+      },
     });
     reject.onclick = () => {
       window.clearTimeout(this.confirmTimer);
