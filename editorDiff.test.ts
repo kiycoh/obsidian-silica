@@ -9,7 +9,7 @@ import { Text } from "@codemirror/state";
 import { WidgetType } from "@codemirror/view";
 
 import { hunkRanges } from "./diff.ts";
-import { hunkDecorations, widgetPos } from "./editorDiff.ts";
+import { hunkDecorations, placeWidget, widgetPos } from "./editorDiff.ts";
 
 class Stub extends WidgetType {
   toDOM(): HTMLElement {
@@ -70,4 +70,46 @@ test("two distant edits stay two separate blocks", () => {
 
 test("nothing changed, nothing decorated", () => {
   assert.deepEqual(layout("a\nb", "a\nb"), []);
+});
+
+// Live Preview replaces a callout with one rendered widget. Anything anchored
+// inside that range is dropped before it reaches the DOM, which is why a write
+// into a callout showed no review block at all until the block was hoisted.
+
+test("a hunk inside a callout hoists its block above the callout", () => {
+  const before = "intro\n> [!NOTE]\n> old line\n> tail\nafter";
+  const after = "intro\n> [!NOTE]\n> new line\n> tail\nafter";
+  // Line 2 is where the callout starts; the changed line is 3.
+  assert.deepEqual(layout(before, after), [[2, "block"]]);
+  const doc = Text.of(after.split("\n"));
+  assert.equal(placeWidget(doc, hunkRanges(before, after)[0]).hoisted, true);
+});
+
+test("the hoisted block drops the tint, since the tinted line is replaced too", () => {
+  // Same edit outside a callout keeps both, so the missing tint is the hoist,
+  // not the diff.
+  assert.deepEqual(layout("a\nold\nb", "a\nnew\nb"), [[2, "block"], [2, "added"]]);
+  assert.deepEqual(layout("a\n> old\nb", "a\n> new\nb"), [[2, "block"]]);
+});
+
+test("a table row hoists to the head of its table", () => {
+  const before = "text\n| a | b |\n| - | - |\n| 1 | 2 |\nend";
+  const after = "text\n| a | b |\n| - | - |\n| 1 | 9 |\nend";
+  assert.deepEqual(layout(before, after), [[2, "block"]]);
+});
+
+test("a hunk on a plain line is not hoisted and keeps its own position", () => {
+  const doc = Text.of("a\nb\nc".split("\n"));
+  const place = placeWidget(doc, hunkRanges("a\nx\nc", "a\nb\nc")[0]);
+  assert.deepEqual(place, { pos: doc.line(2).from, hoisted: false });
+});
+
+test("two hunks in one callout collapse to one position, so keys must tell them apart", () => {
+  const before = "> [!NOTE]\n> one\n> mid\n> two";
+  const after = "> [!NOTE]\n> ONE\n> mid\n> TWO";
+  const doc = Text.of(after.split("\n"));
+  const hunks = hunkRanges(before, after);
+  assert.equal(hunks.length, 2);
+  const [p1, p2] = hunks.map((h) => placeWidget(doc, h).pos);
+  assert.equal(p1, p2); // both blocks land on line 1 — position cannot disambiguate
 });

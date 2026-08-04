@@ -38,21 +38,52 @@ export function refreshEditors(): void {
   for (const v of live) v.refresh();
 }
 
-/** Where a hunk's block sits: the start of its first added line, or end of file
- * for a hunk that only removed lines from the tail. Shared by the builder and
- * the click resolver, which is what lets a click match a freshly computed hunk. */
+// Live Preview replaces a whole callout, blockquote or table with one rendered
+// widget, and a decoration anchored INSIDE a replaced range never reaches the
+// DOM. A hunk landing in one used to lose both its block and its line tint, so
+// a write into a callout was reviewable only from the changes panel. Hoisting
+// the block to the line the construct starts on puts it outside that range.
+// ponytail: `>` and `|` cover callouts, quotes and tables. Math blocks and
+// embeds replace too; add their markers here if a write ever lands in one.
+const BLOCK_LINE = /^\s{0,3}(>|\|)/;
+
+export interface Placement {
+  pos: number;
+  /** True when the block had to move above a replaced construct. The caller
+   * shows the added lines inside the block then: the tint cannot land either. */
+  hoisted: boolean;
+}
+
+/** Where a hunk's block sits: the start of its first added line, hoisted above
+ * any replaced construct that line belongs to, or end of file for a hunk that
+ * only removed lines from the tail. Shared by the builder and the click
+ * resolver, which is what lets a click match a freshly computed hunk. */
+export function placeWidget(doc: Text, h: Hunk): Placement {
+  if (h.afterStart >= doc.lines) return { pos: doc.length, hoisted: false };
+  let line = h.afterStart + 1; // 1-based, as CodeMirror counts them
+  if (!BLOCK_LINE.test(doc.line(line).text)) return { pos: doc.line(line).from, hoisted: false };
+  while (line > 1 && BLOCK_LINE.test(doc.line(line - 1).text)) line--;
+  return { pos: doc.line(line).from, hoisted: true };
+}
+
 export function widgetPos(doc: Text, h: Hunk): number {
-  return h.afterStart >= doc.lines ? doc.length : doc.line(h.afterStart + 1).from;
+  return placeWidget(doc, h).pos;
 }
 
 /** One block above each hunk, plus a tint on every line it added. Split out so
  * the end-of-file cases are checked by asserts against a real document. */
-export function hunkDecorations(doc: Text, hunks: Hunk[], widget: (h: Hunk) => WidgetType): Range<Decoration>[] {
+export function hunkDecorations(
+  doc: Text,
+  hunks: Hunk[],
+  widget: (h: Hunk, hoisted: boolean) => WidgetType,
+): Range<Decoration>[] {
   const ranges: Range<Decoration>[] = [];
   for (const h of hunks) {
     // A hunk that only deleted the tail has no line of its own to sit above.
     const atEof = h.afterStart >= doc.lines;
-    ranges.push(Decoration.widget({ widget: widget(h), block: true, side: atEof ? 1 : -1 }).range(widgetPos(doc, h)));
+    const { pos, hoisted } = placeWidget(doc, h);
+    ranges.push(Decoration.widget({ widget: widget(h, hoisted), block: true, side: atEof ? 1 : -1 }).range(pos));
+    if (hoisted) continue; // the tinted lines are inside the replaced range too
     for (let i = h.afterStart; i < h.afterEnd && i < doc.lines; i++) {
       ranges.push(Decoration.line({ class: "silica-cm-added" }).range(doc.line(i + 1).from));
     }
@@ -67,24 +98,34 @@ type Act = (dom: HTMLElement, view: EditorView, accept: boolean) => void;
 class HunkWidget extends WidgetType {
   key: string;
   removed: string[];
+  added: string[];
+  /** Hoisted above a replaced construct, so the added lines have no tint of
+   * their own and the block has to carry both sides. */
+  hoisted: boolean;
   act: Act;
 
-  constructor(key: string, removed: string[], act: Act) {
+  constructor(key: string, removed: string[], added: string[], hoisted: boolean, act: Act) {
     super();
     this.key = key;
     this.removed = removed;
+    this.added = added;
+    this.hoisted = hoisted;
     this.act = act;
   }
 
   eq(other: HunkWidget): boolean {
-    return other.key === this.key;
+    return other.key === this.key && other.hoisted === this.hoisted;
   }
 
   toDOM(view: EditorView): HTMLElement {
     const box = document.createElement("div");
     box.addClass("silica-cm-hunk");
+    // The key rides on the node so a click resolves to its own hunk. Two hunks
+    // inside one callout hoist to the same position, and a position alone would
+    // send both clicks to whichever came first.
+    box.dataset.silicaKey = this.key;
     const bar = box.createDiv({ cls: "silica-cm-bar" });
-    bar.createSpan({ cls: "silica-cm-tag", text: "Silica" });
+    bar.createSpan({ cls: "silica-cm-tag", text: this.hoisted ? "Silica, in the block below" : "Silica" });
     const add = (label: string, accept: boolean) => {
       const b = bar.createEl("button", { cls: `silica-cm-btn silica-cm-${accept ? "accept" : "reject"}`, text: label });
       b.setAttribute("aria-label", accept ? "Accept this change" : "Reject this change, restoring the previous text");
@@ -96,9 +137,21 @@ class HunkWidget extends WidgetType {
     for (const text of this.removed) {
       box.createDiv({ cls: "silica-cm-removed", text: `-${text}` });
     }
+    // Only when hoisted. Everywhere else the added lines are right there in the
+    // document under a green tint, and repeating them would double the block.
+    if (this.hoisted) {
+      for (const text of this.added) {
+        box.createDiv({ cls: "silica-cm-inserted", text: `+${text}` });
+      }
+    }
     return box;
   }
 }
+
+/** Identity of a hunk within a note. Content-derived, so a widget whose lines
+ * changed is redrawn and an untouched one is left alone. */
+const keyOf = (path: string, h: Hunk): string =>
+  [path, h.afterStart, h.removed.join("\n"), h.added.join("\n")].join("|");
 
 export function silicaDiff(host: DiffHost, filePath: PathOf): Extension {
   /** Resolve the clicked block against the document as it stands. A click can
@@ -109,8 +162,12 @@ export function silicaDiff(host: DiffHost, filePath: PathOf): Extension {
     if (!path) return;
     const { doc } = view.state;
     const text = doc.toString();
-    const pos = view.posAtDOM(dom);
-    const hunk = host.hunksFor(path, text).find((h) => widgetPos(doc, h) === pos);
+    const hunks = host.hunksFor(path, text);
+    // Match on the block's own key, falling back to its position for a widget
+    // drawn before this rule existed. An edit that dissolved the hunk matches
+    // nothing and no-ops, which is the point of re-resolving against live text.
+    const key = dom.dataset.silicaKey;
+    const hunk = hunks.find((h) => keyOf(path, h) === key) ?? hunks.find((h) => widgetPos(doc, h) === view.posAtDOM(dom));
     if (!hunk) return;
     if (accept) host.acceptHunk(path, hunk, text);
     else host.rejectHunk(path, hunk, view);
@@ -120,13 +177,8 @@ export function silicaDiff(host: DiffHost, filePath: PathOf): Extension {
     const { doc } = state;
     const path = filePath(state);
     const hunks = path ? host.hunksFor(path, doc.toString()) : [];
-    // The key carries the block's content, so CodeMirror redraws a widget whose
-    // lines changed and leaves an untouched one alone.
-    const ranges = hunkDecorations(doc, hunks, (h) => new HunkWidget(
-      [path, h.afterStart, h.removed.join("\n"), h.added.join("\n")].join("|"),
-      h.removed,
-      act,
-    ));
+    const ranges = hunkDecorations(doc, hunks, (h, hoisted) =>
+      new HunkWidget(keyOf(path as string, h), h.removed, h.added, hoisted, act));
     return Decoration.set(ranges, true);
   };
 

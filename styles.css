@@ -96,6 +96,14 @@
   font-family: var(--font-monospace); font-size: var(--font-smaller); line-height: 1.45;
   color: var(--text-muted); text-decoration: line-through; white-space: pre-wrap;
 }
+/* Only appears on a hoisted block, where the added lines live inside a callout
+   or table that Live Preview replaced and so can carry no tint of their own. */
+.silica-cm-inserted {
+  padding: 0 var(--size-4-2);
+  font-family: var(--font-monospace); font-size: var(--font-smaller); line-height: 1.45;
+  color: var(--text-normal); white-space: pre-wrap;
+  background: rgba(var(--color-green-rgb, 68, 207, 110), 0.10);
+}
 .silica-cm-bar {
   display: flex; align-items: center; gap: var(--size-4-2);
   padding: 2px var(--size-4-2); font-size: var(--font-ui-smaller);
