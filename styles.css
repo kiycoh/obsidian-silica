@@ -109,3 +109,100 @@
 .silica-cm-btn:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
 .silica-cm-accept:hover { border-color: rgb(var(--color-green-rgb, 68, 207, 110)); }
 .silica-cm-reject:hover { border-color: rgb(var(--color-red-rgb, 233, 49, 71)); }
+
+/* --- Offline surfaces: related notes and the community graph ------------- */
+
+.silica-related { padding: var(--size-4-2); }
+.silica-related .silica-empty { color: var(--text-faint); font-size: var(--font-ui-smaller); }
+/* A row is a button so the list is keyboard reachable; the bar underlays the
+   text rather than sitting beside it, so a long title never squeezes it out. */
+.silica-related-row {
+  position: relative; display: flex; align-items: baseline; gap: var(--size-4-2);
+  width: 100%; padding: var(--size-4-1) var(--size-4-2); margin-bottom: 2px;
+  background: none; box-shadow: none; border: none; border-radius: var(--radius-s);
+  text-align: left; cursor: pointer; overflow: hidden;
+}
+.silica-related-row:hover { background: var(--background-modifier-hover); }
+.silica-related-name {
+  flex: 1; min-width: 0; color: var(--text-normal); font-size: var(--font-ui-small);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.silica-related-score { color: var(--text-faint); font-size: var(--font-ui-smaller); font-variant-numeric: tabular-nums; }
+.silica-related-bar {
+  position: absolute; left: 0; bottom: 0; height: 2px;
+  background: var(--interactive-accent); opacity: 0.55;
+}
+.silica-hit-path { display: block; color: var(--text-faint); }
+/* One line, never two: a snippet that wraps turns the result list into prose. */
+.silica-hit-snippet {
+  color: var(--text-muted); font-size: var(--font-ui-smaller);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.silica-hit-snippet mark {
+  background: none; color: var(--text-normal); font-weight: var(--font-semibold);
+}
+
+/* --- The note panel's toolbar and sections ------------------------------- */
+
+.silica-note-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--size-4-2);
+  padding-bottom: var(--size-4-2); margin-bottom: var(--size-4-1);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.silica-note-next { font-size: var(--font-ui-smaller); }
+.silica-note-scope {
+  display: inline-flex; align-items: center; gap: var(--size-4-1);
+  color: var(--text-muted); font-size: var(--font-ui-smaller); cursor: pointer;
+}
+/* Headings sit between rows, so they are sized like the rows rather than like
+   note headings: a section label must not outweigh what it labels. */
+.silica-note-section {
+  margin: var(--size-4-3) 0 var(--size-4-1); color: var(--text-muted);
+  font-size: var(--font-ui-smaller); font-weight: var(--font-semibold);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.silica-note-section:first-child { margin-top: 0; }
+.silica-note-flag { flex: 0 0 auto; color: var(--text-accent); font-size: var(--font-ui-smaller); }
+/* A broken link is text, not a target: it must not look clickable. */
+.silica-note-dead {
+  padding: var(--size-4-1) var(--size-4-2); color: var(--text-muted);
+  font-size: var(--font-ui-small); text-decoration: line-through;
+  text-decoration-color: var(--text-faint);
+}
+
+.silica-graph { display: flex; flex-direction: column; height: 100%; }
+.silica-graph-bar {
+  display: flex; align-items: center; gap: var(--size-4-2); flex-wrap: wrap;
+  padding: var(--size-4-2); border-bottom: 1px solid var(--background-modifier-border);
+}
+.silica-graph-legend { display: flex; align-items: center; gap: var(--size-4-3); flex-wrap: wrap; }
+.silica-graph-count { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.silica-graph-chip {
+  display: inline-flex; align-items: center; gap: var(--size-4-1);
+  color: var(--text-muted); font-size: var(--font-ui-smaller);
+}
+.silica-graph-dot { width: 8px; height: 8px; border-radius: 50%; }
+.silica-graph-canvas { flex: 1; width: 100%; min-height: 0; cursor: grab; }
+.silica-graph-canvas:active { cursor: grabbing; }
+/* The disambiguating folder must never eat the title it disambiguates: it
+   shrinks far faster than the name and is capped, so a deep path elides instead
+   of squeezing the name out of the row entirely. */
+.silica-related-dir {
+  flex: 0 1000 auto; min-width: 0; max-width: 45%;
+  color: var(--text-faint); font-size: var(--font-ui-smaller);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left;
+}
+
+/* The offline features have no other affordance, so the row reads as a toolbar,
+   not as four submit buttons: quiet until hovered. */
+.silica-launchers { display: flex; gap: var(--size-4-1); flex-wrap: wrap; margin-bottom: var(--size-4-2); }
+.silica-launcher {
+  /* No grow. Any grow makes the leftover button on a wrapped line stretch across
+     the width, and no flex-basis fixes that at every sidebar size — it only moves
+     which size it happens at. Content-width buttons wrap cleanly at all of them. */
+  flex: 0 1 auto; padding: var(--size-4-1) var(--size-4-2);
+  background: none; box-shadow: none; border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s); color: var(--text-muted);
+  font-size: var(--font-ui-smaller); cursor: pointer; white-space: nowrap;
+}
+.silica-launcher:hover { color: var(--text-normal); background: var(--background-modifier-hover); }

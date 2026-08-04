@@ -173,8 +173,10 @@ function allVaultTitles(app: RpcApp): string[] {
 /** Typed port of cli_backend._AUTOLINK_JS. Skip-mask from getFileCache (code
  * sections, frontmatter, existing links/embeds/headings) plus inline-code/math
  * regexes; match resolvable titles longest-first at word boundaries; wrap via
- * generateMarkdownLink; one atomic vault.process. Returns titles actually linked. */
-async function autolinkNote(
+ * generateMarkdownLink; one atomic vault.process. Returns titles actually linked.
+ * Exported because the bridge is no longer the only caller: the autolink commands
+ * run it with no agent connected, into the same changes panel. */
+export async function autolinkNote(
   app: RpcApp,
   path: string,
   candidatesRaw: unknown,

@@ -1,11 +1,13 @@
-import { App, ItemView, MarkdownRenderer, Notice, Plugin, PluginSettingTab, WorkspaceLeaf, editorInfoField, normalizePath, type SettingDefinitionItem } from "obsidian";
+import { App, ItemView, MarkdownRenderer, MarkdownView, Notice, Plugin, PluginSettingTab, WorkspaceLeaf, editorInfoField, normalizePath, type SettingDefinitionItem, type TFile } from "obsidian";
 import type { EditorView } from "@codemirror/view";
 
 import { BridgeClient, str, type BridgeInfo, type Frame, type SocketLike, type Status } from "./bridge.ts";
 import { applyChatFrame, emptyTurn, type TurnState } from "./chat.ts";
 import { acceptInBaseline, diffLines, hunkRanges, hunks, rejectEdit, tally, type DiffLine, type Hunk } from "./diff.ts";
 import { refreshEditors, silicaDiff, type DiffHost } from "./editorDiff.ts";
-import { dispatchRpc, ensureFolder, RPC_METHODS, type Change, type RpcApp } from "./handlers.ts";
+import { autolinkNote, dispatchRpc, ensureFolder, RPC_METHODS, type Change, type RpcApp } from "./handlers.ts";
+import { buildCorpus, type Corpus, type CorpusVault } from "./corpus.ts";
+import { GraphView, GRAPH_VIEW, NoteView, RELATED_VIEW, SearchModal, type IndexHost } from "./views.ts";
 
 const VIEW_TYPE = "silica-bridge-view";
 const BRIDGE_BASENAME = "silica-bridge.json";
@@ -18,32 +20,160 @@ interface SilicaSettings {
 }
 const DEFAULT_SETTINGS: SilicaSettings = { portOverride: "" };
 
-export default class SilicaBridgePlugin extends Plugin implements DiffHost {
+export default class SilicaBridgePlugin extends Plugin implements DiffHost, IndexHost {
   settings: SilicaSettings = DEFAULT_SETTINGS;
   client: BridgeClient | null = null;
   status: Status = "disconnected";
   statusDetail = "";
   /** What Silica has written this session, one row per file, insertion-ordered. */
   changes = new Map<string, Change>();
+  /** The offline index. Rebuilt on demand, incremental on mtime, never persisted
+   * — a full build of a few thousand notes is a second, and a stale cache on
+   * disk is a bug class this does not need. */
+  private corpusCache: Corpus | null = null;
+  private corpusInFlight: Promise<Corpus> | null = null;
 
   async onload(): Promise<void> {
     const saved = (await this.loadData()) as Partial<SilicaSettings> | null;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
     this.registerView(VIEW_TYPE, (leaf) => new BridgeView(leaf, this));
+    this.registerView(RELATED_VIEW, (leaf) => new NoteView(leaf, this));
+    this.registerView(GRAPH_VIEW, (leaf) => new GraphView(leaf, this));
     // Inline accept/reject blocks. The path lookup is passed in so editorDiff.ts
     // stays free of Obsidian imports and can be exercised headlessly.
     this.registerEditorExtension(
       silicaDiff(this, (state) => state.field(editorInfoField, false)?.file?.path ?? null),
     );
     this.addRibbonIcon("link", "Silica bridge", () => void this.activateView());
+    // The graph is a destination, not a panel, so it gets the affordance core
+    // Obsidian gives its own graph: an icon in the ribbon. Same glyph as the view
+    // tab, which is what makes the two read as one thing.
+    this.addRibbonIcon("git-fork", "Silica community graph", () => void this.activateLeaf(GRAPH_VIEW, "tab"));
     this.addCommand({
       id: "open-panel", // Obsidian prefixes the plugin name; don't repeat it here.
       name: "Open bridge panel",
       callback: () => void this.activateView(),
     });
+    // Everything below runs with the agent switched off: the algorithms are the
+    // plugin's own, the vault is the only input.
+    this.addCommand({
+      id: "autolink-note",
+      name: "Autolink this note",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension !== "md") return false;
+        if (!checking) void this.autolink([file.path]);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "autolink-vault",
+      name: "Autolink every note",
+      callback: () => void this.autolink(this.app.vault.getMarkdownFiles().map((f) => f.path)),
+    });
+    this.addCommand({
+      id: "open-related", // id kept: renaming it would drop everyone's hotkey
+      name: "Open note panel",
+      callback: () => void this.activateLeaf(RELATED_VIEW),
+    });
+    this.addCommand({
+      id: "next-attention",
+      name: "Open the next note that needs attention",
+      callback: () => void this.nextAttention(),
+    });
+    this.addCommand({
+      id: "search",
+      name: "Search by relevance",
+      callback: () => void this.corpus().then((c) => new SearchModal(this.app, c).open()),
+    });
+    this.addCommand({
+      id: "open-graph",
+      name: "Open community graph",
+      callback: () => void this.activateLeaf(GRAPH_VIEW, "tab"),
+    });
+    // The note panel follows the reader; the corpus behind it is memoised and now
+    // returns the same object when nothing moved, so this costs an mtime scan per
+    // note switch, not a reindex. `resolved` is here too because half the panel
+    // reads the link tables, and those settle after the file does.
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshNotePanel()));
+    this.registerEvent(this.app.metadataCache.on("resolved", () => this.refreshNotePanel()));
     this.addSettingTab(new SilicaSettingTab(this.app, this));
     // Heavy setup after layout is ready (avoids the startup `create` event storm).
     this.app.workspace.onLayoutReady(() => this.connect());
+  }
+
+  /** The corpus, refreshed against the vault's mtimes. Concurrent callers share
+   * one build — the related pane and the graph both ask on open. */
+  corpus(): Promise<Corpus> {
+    if (this.corpusInFlight) return this.corpusInFlight;
+    const vault = this.app.vault as unknown as CorpusVault;
+    const build = buildCorpus(vault, this.corpusCache).then(
+      (c) => {
+        this.corpusCache = c;
+        this.corpusInFlight = null;
+        return c;
+      },
+      (e: unknown) => {
+        this.corpusInFlight = null;
+        throw e;
+      },
+    );
+    return (this.corpusInFlight = build);
+  }
+
+  private refreshNotePanel(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(RELATED_VIEW)) {
+      if (leaf.view instanceof NoteView) void leaf.view.refresh();
+    }
+  }
+
+  /** The palette twin of the panel's Next button. Opens the panel first, so the
+   * reader lands on the note with the reasons already beside it. */
+  private async nextAttention(): Promise<void> {
+    await this.activateLeaf(RELATED_VIEW);
+    for (const leaf of this.app.workspace.getLeavesOfType(RELATED_VIEW)) {
+      if (leaf.view instanceof NoteView) {
+        await leaf.view.next();
+        return;
+      }
+    }
+  }
+
+  /** Autolink the note in front of the reader. The command can gray itself out
+   * when there is none; a button in the panel cannot, so it says so instead. */
+  async autolinkActive(): Promise<void> {
+    const file = this.app.workspace.getActiveFile();
+    if (!file || file.extension !== "md") {
+      new Notice("Silica: open a markdown note first.");
+      return;
+    }
+    await this.autolink([file.path]);
+  }
+
+  /** Inject wikilinks for vault titles a note mentions but does not link. Every
+   * touched file lands in the changes panel, so the pass is reviewed and revertable
+   * exactly like one the agent drove. */
+  private async autolink(paths: string[]): Promise<void> {
+    const rpc = this.app as unknown as RpcApp; // same narrowing as onRpc
+    let touched = 0;
+    let added = 0;
+    for (const path of paths) {
+      try {
+        const links = await autolinkNote(rpc, path, null, (c) => this.noteChange(c));
+        if (links.length) {
+          touched++;
+          added += links.length;
+        }
+      } catch (e) {
+        new Notice(`Silica: autolink failed on ${path}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    new Notice(
+      added
+        ? `Silica: ${added} link${added === 1 ? "" : "s"} across ${touched} note${touched === 1 ? "" : "s"} — review them in the bridge panel.`
+        : "Silica: nothing to link.",
+    );
+    if (added) await this.activateView();
   }
 
   onunload(): void {
@@ -241,11 +371,21 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost {
   }
 
   async activateView(): Promise<void> {
+    await this.activateLeaf(VIEW_TYPE);
+  }
+
+  /** Reveal the one leaf of `type`, creating it where it belongs: the panels go
+   * in the sidebar, the graph gets a full tab. */
+  async activateLeaf(type: string, where: "right" | "tab" = "right"): Promise<void> {
     const { workspace } = this.app;
-    const existing = workspace.getLeavesOfType(VIEW_TYPE);
-    const leaf: WorkspaceLeaf | null = existing.length ? existing[0] : workspace.getRightLeaf(false);
+    const existing = workspace.getLeavesOfType(type);
+    const leaf: WorkspaceLeaf | null = existing.length
+      ? existing[0]
+      : where === "tab"
+        ? workspace.getLeaf("tab")
+        : workspace.getRightLeaf(false);
     if (!leaf) return;
-    if (!existing.length) await leaf.setViewState({ type: VIEW_TYPE, active: true });
+    if (!existing.length) await leaf.setViewState({ type, active: true });
     await workspace.revealLeaf(leaf);
   }
 
@@ -314,6 +454,23 @@ class BridgeView extends ItemView {
     const el = this.contentEl;
     el.empty();
     el.addClass("silica-bridge");
+    // The offline surfaces have nowhere else to be reached from: without this row
+    // they live only in the command palette, which is where a feature goes to be
+    // missed. They sit above the status line because they work whatever it says.
+    const launchers = el.createDiv({ cls: "silica-launchers" });
+    const launch = (label: string, tip: string, run: () => void) => {
+      const button = launchers.createEl("button", { cls: "silica-launcher", text: label });
+      button.setAttribute("aria-label", tip);
+      button.onclick = run;
+    };
+    launch("Related", "Notes about the same thing as the open one", () =>
+      void this.plugin.activateLeaf(RELATED_VIEW));
+    launch("Search", "Rank the whole vault by relevance", () =>
+      void this.plugin.corpus().then((c) => new SearchModal(this.app, c).open()));
+    launch("Graph", "Community graph of the vault", () =>
+      void this.plugin.activateLeaf(GRAPH_VIEW, "tab"));
+    launch("Autolink", "Link the titles this note mentions", () =>
+      void this.plugin.autolinkActive());
     this.statusEl = el.createEl("p", { cls: "silica-status" });
     this.logEl = el.createDiv({ cls: "silica-log" });
     this.changesEl = el.createDiv({ cls: "silica-changes" });
