@@ -2,7 +2,7 @@
 // them talks to the bridge — they read the vault and the corpus index, so they
 // work with the agent switched off.
 
-import { ItemView, Notice, SuggestModal, TFile, type App, type WorkspaceLeaf } from "obsidian";
+import { ItemView, Notice, SuggestModal, TFile, setIcon, type App, type WorkspaceLeaf } from "obsidian";
 
 import { attentionQueue, noteSignals, type AttentionRow, type LinkTables } from "./attention.ts";
 import type { Corpus } from "./corpus.ts";
@@ -63,7 +63,9 @@ export class NoteView extends ItemView {
     this.contentEl.empty();
     this.contentEl.addClass("silica-related");
     const bar = this.contentEl.createDiv({ cls: "silica-note-bar" });
-    const next = bar.createEl("button", { cls: "silica-note-next", text: "Next" });
+    const next = bar.createEl("button", { cls: "silica-quiet silica-note-next" });
+    setIcon(next, "arrow-right");
+    next.createSpan({ text: "Next" });
     next.setAttribute("aria-label", "Open the next note that needs attention");
     next.onclick = () => void this.next();
     const scope = bar.createEl("label", { cls: "silica-note-scope" });
@@ -158,6 +160,14 @@ export class NoteView extends ItemView {
       const name = corpus.titles.get(other) ?? other;
       const parent = parentOf(other);
       const row = this.listEl.createEl("button", { cls: "silica-related-row" });
+      // The wash goes in first and everything after it is lifted into the
+      // positioned layer by the stylesheet: an absolutely positioned child
+      // paints above static content whatever the DOM order, so a bar added last
+      // would tint the title it is measuring.
+      // It is scaled against the strongest row of THIS section, not against
+      // 1.0: overlaps above ~0.5 barely happen, so an absolute scale would be a
+      // row of stubs, and a stale row's near-zero score would vanish entirely.
+      row.createDiv({ cls: "silica-related-bar" }).style.width = `${Math.round((score / top) * 100)}%`;
       row.createSpan({ cls: "silica-related-name", text: name });
       if ((dupTitles.get(name) ?? 0) > 1 && parent) row.createSpan({ cls: "silica-related-dir", text: parent });
       // A related note nobody linked either way is the one worth a wikilink; the
@@ -166,10 +176,6 @@ export class NoteView extends ItemView {
       // The number and the bar say the same thing; the number is the one a
       // screen reader gets, so it is not decoration.
       row.createSpan({ cls: "silica-related-score", text: score.toFixed(2) });
-      // The bar is scaled against the strongest row of THIS section, not against
-      // 1.0: overlaps above ~0.5 barely happen, so an absolute bar would be a row
-      // of stubs, and a stale row's near-zero score would vanish entirely.
-      row.createDiv({ cls: "silica-related-bar" }).style.width = `${Math.round((score / top) * 100)}%`;
       row.setAttribute("aria-label", `${other}, overlap ${score.toFixed(2)}`);
       row.onclick = () => void this.app.workspace.openLinkText(other, from, false);
     }
@@ -275,7 +281,10 @@ export class GraphView extends ItemView {
     el.empty();
     el.addClass("silica-graph");
     const bar = el.createDiv({ cls: "silica-graph-bar" });
-    const rebuild = bar.createEl("button", { text: "Rebuild" });
+    const rebuild = bar.createEl("button", { cls: "silica-quiet silica-graph-rebuild" });
+    setIcon(rebuild, "refresh-cw");
+    rebuild.createSpan({ text: "Rebuild" });
+    rebuild.setAttribute("aria-label", "Re-index the vault and lay the graph out again");
     rebuild.onclick = () => void this.rebuild();
     this.legendEl = bar.createDiv({ cls: "silica-graph-legend" });
     this.canvas = el.createEl("canvas", { cls: "silica-graph-canvas" });
@@ -345,7 +354,7 @@ export class GraphView extends ItemView {
     ctx.clearRect(0, 0, w, h);
     if (!graph || !graph.nodes.length) {
       ctx.fillStyle = this.themeColor("--text-faint", "#888");
-      ctx.font = "13px sans-serif"; // canvas will not resolve a CSS var here
+      ctx.font = this.font(13);
       ctx.fillText("No edges yet — write a link or index a few more notes.", 12, 24);
       return;
     }
@@ -360,7 +369,10 @@ export class GraphView extends ItemView {
     // and drawing it second keeps it readable over the neutrals.
     for (const inferred of [false, true]) {
       ctx.strokeStyle = inferred
-        ? this.themeColor("--color-cyan", paper ? "#0b7285" : "#4dd0e1")
+        // An inferred edge is Silica's own claim, so it wears the plugin accent
+        // — the same hue as the status dot and the overlap bars, and the only
+        // place the picture says "this one is mine".
+        ? this.themeColor("--silica-accent", paper ? "#0b7285" : "#22b8cf")
         : this.themeColor("--text-faint", paper ? "#9aa0a6" : "#5a5f6b");
       ctx.globalAlpha = inferred ? 0.35 : 0.6;
       ctx.beginPath();
@@ -388,7 +400,7 @@ export class GraphView extends ItemView {
     // one already drawn is skipped, not shrunk. Zooming in frees room, which is
     // what makes the picture readable at every scale instead of only when small.
     ctx.fillStyle = this.themeColor("--text-muted", paper ? "#444" : "#bbb");
-    ctx.font = "11px sans-serif";
+    ctx.font = this.font(11);
     ctx.textAlign = "center";
     const taken: Array<[number, number, number, number]> = [];
     for (const node of [...graph.nodes].sort((a, b) => b.deg - a.deg)) {
@@ -407,6 +419,13 @@ export class GraphView extends ItemView {
 
   private themeColor(name: string, fallback: string): string {
     return getComputedStyle(this.containerEl).getPropertyValue(name).trim() || fallback;
+  }
+
+  /** Canvas resolves no CSS var, so the interface font has to be read off the
+   * element. Without it the graph is the one surface in the plugin set in a
+   * different typeface from everything around it. */
+  private font(px: number): string {
+    return `${px}px ${getComputedStyle(this.containerEl).fontFamily || "sans-serif"}`;
   }
 
   private onWheel(e: WheelEvent): void {

@@ -1,71 +1,257 @@
-/* Silica bridge chat panel. Uses Obsidian CSS variables so it tracks the theme. */
-.silica-bridge { display: flex; flex-direction: column; height: 100%; gap: var(--size-4-2); }
-.silica-status { margin: 0; color: var(--text-muted); font-size: var(--font-ui-smaller); }
+/* Silica plugin surfaces.
+ *
+ * Everything structural — surface, text, border, spacing, radius — comes from
+ * Obsidian's own variables, so the plugin tracks whatever theme the reader runs
+ * and never fights a third-party one. The plugin owns exactly two values of its
+ * own, declared here and nowhere else: an accent and a motion pair.
+ */
+body {
+  /* Quartz cyan, spent ONLY on what Silica itself computed: connection state,
+     overlap strength, the inferred edges in the graph, the mark. Deliberately
+     not --interactive-accent — that hue already means "an Obsidian control",
+     and reusing it would make Silica's inferences look like buttons.
+     Measured: 7.0:1 on the default dark background. */
+  --silica-accent: #22b8cf;
+  /* One easing and one duration for the whole plugin. Scattered ad-hoc
+     durations are the cheapest-looking thing a stylesheet can do. */
+  --silica-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --silica-dur: 120ms;
+}
+body.theme-light {
+  --silica-accent: #0b7285; /* 5.6:1 on white */
+}
+@media (prefers-reduced-motion: reduce) {
+  body { --silica-dur: 0ms; }
+}
 
-.silica-log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: var(--size-4-3); }
-.silica-msg { padding: var(--size-4-2) var(--size-4-3); border-radius: var(--radius-m); max-width: 100%; }
-.silica-user { background: var(--background-modifier-hover); align-self: flex-end; white-space: pre-wrap; }
-.silica-silica { background: var(--background-secondary); align-self: stretch; }
+/* --- The one control pattern the plugin repeats ------------------------- */
+
+/* Every quiet control in the plugin is this: no chrome at rest, a fill on
+   hover, a real focus ring. It replaced four near-identical declarations that
+   had drifted apart on padding alone.
+
+   The `button` in the selector is load-bearing, not decoration. Obsidian styles
+   its own buttons with `button:not(.clickable-icon)`, and :not() carries its
+   argument's weight, so that rule is (0,1,1) and a bare `.silica-quiet` at
+   (0,1,0) loses to it — silently, since the result is a perfectly normal
+   looking button. Every quiet control in this plugin had been rendering as a
+   filled Obsidian button with a drop shadow because of it. Anything here that
+   sets background, box-shadow or colour on a <button> has to name the element
+   to reach (0,1,1) and win on document order. */
+button.silica-quiet {
+  background: none;
+  box-shadow: none;
+  border: none;
+  border-radius: var(--radius-s);
+  padding: var(--size-4-1) var(--size-4-2);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+  transition: color var(--silica-dur) var(--silica-ease),
+              background-color var(--silica-dur) var(--silica-ease);
+}
+button.silica-quiet:hover:not(:disabled) { color: var(--text-normal); background: var(--background-modifier-hover); }
+button.silica-quiet:disabled { cursor: default; color: var(--text-faint); }
+/* Obsidian's focus ring is a box-shadow, so every control that clears its own
+   box-shadow has to put one back or it becomes keyboard-invisible. */
+button.silica-quiet:focus-visible,
+button.silica-related-row:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+.silica-quiet .svg-icon { width: 14px; height: 14px; }
+
+/* --- Chat panel ---------------------------------------------------------- */
+
+.silica-bridge { display: flex; flex-direction: column; height: 100%; gap: var(--size-4-2); }
+
+/* The offline features have no other affordance, so the row reads as a toolbar,
+   not as four submit buttons. Chips rather than outlines: four boxes at rest is
+   more visual noise than four low-contrast fills, and reads as less. */
+.silica-launchers { display: flex; gap: var(--size-4-1); flex-wrap: wrap; }
+button.silica-launcher {
+  /* No grow. Any grow makes the leftover button on a wrapped line stretch across
+     the width, and no flex-basis fixes that at every sidebar size — it only moves
+     which size it happens at. Content-width buttons wrap cleanly at all of them. */
+  flex: 0 1 auto;
+  background: var(--background-modifier-hover);
+  white-space: nowrap;
+}
+button.silica-launcher:hover:not(:disabled) { background: var(--background-modifier-active-hover); }
+
+/* Connection state is the one piece of chrome that is always on screen, so it
+   is a dot and a sentence, not a lowercase dump of an internal enum. The dot
+   carries a semantic colour (green/amber/red keep their universal meaning);
+   the accent is reserved for Silica's own inferences. */
+.silica-status {
+  display: flex; align-items: baseline; gap: var(--size-4-2);
+  margin: 0; color: var(--text-muted); font-size: var(--font-ui-smaller);
+}
+.silica-status-dot {
+  flex: none; width: 6px; height: 6px; border-radius: 50%;
+  align-self: center; background: var(--text-faint);
+  transition: background-color var(--silica-dur) var(--silica-ease);
+}
+.silica-status-connected .silica-status-dot { background: var(--color-green); }
+.silica-status-connecting .silica-status-dot {
+  background: var(--color-orange);
+  animation: silica-breathe 1.4s var(--silica-ease) infinite;
+}
+.silica-status-disconnected .silica-status-dot { background: var(--color-red); }
+.silica-status-label { flex: none; color: var(--text-normal); }
+/* The detail wraps to two lines and then clamps. It used to elide on one line,
+   which was wrong for the case that matters most: disconnected, where the
+   detail IS the recovery ("run `silica connect`") and a 255px sidebar cut it to
+   "run `silica connect` (no…". Two lines fits every real detail; the clamp
+   still stops a dial error from turning the status into a paragraph, and the
+   title attribute carries the full string either way. */
+.silica-status-detail {
+  flex: 1; min-width: 0; overflow: hidden;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+}
+@keyframes silica-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.silica-log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: var(--size-4-4); }
+.silica-msg { max-width: 100%; }
+/* Only the reader's turn is a bubble. The answer is a sheet on the panel: it
+   carries code fences, tables and rendered markdown, and hug-content styling
+   fights all three. It also has no background of its own on purpose — the old
+   --background-secondary was the sidebar's own colour, so the sheet was
+   invisible in a sidebar and mismatched in a main-area tab. Rhythm separates
+   the turns instead, which is correct in both places. */
+.silica-user {
+  padding: var(--size-4-2) var(--size-4-3);
+  border-radius: var(--radius-m);
+  background: var(--background-modifier-hover);
+  align-self: flex-end;
+  white-space: pre-wrap;
+}
+.silica-silica { align-self: stretch; }
 .silica-body { white-space: pre-wrap; }
 .silica-body > :first-child { margin-top: 0; }
 .silica-body > :last-child { margin-bottom: 0; }
 .silica-error { color: var(--text-error); }
 
+/* The one authored moment in the plugin: the answer arriving. A caret while it
+   streams, then the finished markdown settles into place. Nothing else in the
+   plugin animates position. */
+.silica-caret {
+  display: inline-block; width: 0.45em; height: 1.05em;
+  margin-left: 2px; vertical-align: text-bottom;
+  background: var(--silica-accent);
+  animation: silica-blink 1.1s var(--silica-ease) infinite;
+}
+@keyframes silica-blink {
+  0%, 45% { opacity: 1; }
+  55%, 100% { opacity: 0.2; }
+}
+.silica-in { animation: silica-settle 220ms var(--silica-ease); }
+@keyframes silica-settle {
+  from { opacity: 0.4; transform: translateY(4px); }
+}
+
+/* One tool call per line: an icon for the state, the label, the error if any.
+   Monospace is gone — these are sentences about what ran, not code. */
 .silica-tools { display: flex; flex-direction: column; gap: 2px; margin-bottom: var(--size-4-2); }
-.silica-tool { font-size: var(--font-ui-smaller); color: var(--text-muted); font-family: var(--font-monospace); }
-.silica-tool-done { color: var(--text-success); }
-.silica-tool-error { color: var(--text-error); }
+.silica-tool {
+  display: flex; align-items: center; gap: var(--size-4-2);
+  font-size: var(--font-ui-smaller); color: var(--text-muted);
+}
+.silica-tool .svg-icon { flex: none; width: 13px; height: 13px; }
+.silica-tool-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Never shrinks: the label elides around it. A failure whose reason scrolled
+   off the end is a row that only says something went wrong somewhere. */
+.silica-tool-reason { flex: none; color: var(--text-error); }
+.silica-tool-done .svg-icon { color: var(--color-green); }
+/* The cross and the reason carry the error. Reddening the whole row as well
+   made one line of four shout over everything the turn actually did. */
+.silica-tool-error .svg-icon { color: var(--color-red); }
+/* Running: the same breathing the connecting dot uses, so "work in flight"
+   looks like one idea across the panel. */
+.silica-tool-run .svg-icon {
+  color: var(--silica-accent);
+  animation: silica-breathe 1.4s var(--silica-ease) infinite;
+}
+
+/* First run has no log and no changes, so without this the panel is a toolbar
+   above an empty box. */
+.silica-empty-chat {
+  margin: auto 0; padding: var(--size-4-4) var(--size-4-2);
+  color: var(--text-muted); font-size: var(--font-ui-small); text-align: center;
+}
+.silica-empty-chat .svg-icon {
+  width: 28px; height: 28px; color: var(--text-faint);
+  margin-bottom: var(--size-4-2);
+}
 
 .silica-input-row { display: flex; gap: var(--size-4-2); align-items: flex-end; }
-.silica-input-row textarea { flex: 1; resize: vertical; min-height: 2.4em; }
+.silica-input-row textarea {
+  flex: 1; resize: vertical; min-height: 2.4em;
+  transition: border-color var(--silica-dur) var(--silica-ease);
+}
 
-/* Changed-files list + inline diff. Capped height so it never squeezes the log;
-   the fallback triplets keep the +/− blocks readable if a theme drops the vars. */
+/* --- Changed files + inline diff ---------------------------------------- */
+
+/* The head sits outside the scroller and the list inside it. It used to be
+   sticky over the whole panel, which needed a background to paint over the
+   scrolling rows — and the only var available was the sidebar's, so the header
+   was the wrong colour whenever the panel opened as a main-area tab. Taking the
+   head out of the scroll deletes the problem instead of theming around it. */
 .silica-changes {
-  display: flex; flex-direction: column; max-height: 45%; overflow-y: auto;
+  display: flex; flex-direction: column; max-height: 45%; overflow: hidden;
   border-top: 1px solid var(--background-modifier-border);
 }
 .silica-changes-head {
+  flex: none;
   display: flex; align-items: center; justify-content: space-between; gap: var(--size-4-2);
-  padding: var(--size-4-1) 0; font-size: var(--font-ui-smaller); color: var(--text-muted);
-  position: sticky; top: 0; background: var(--background-secondary); z-index: 1;
+  padding: var(--size-4-2) 0 var(--size-4-1);
+  font-size: var(--font-ui-smaller); color: var(--text-muted);
 }
-.silica-changes-head button {
-  background: none; box-shadow: none; border: none; padding: 0 var(--size-4-1);
-  font-size: var(--font-ui-smaller); color: var(--text-muted); cursor: pointer;
-}
-.silica-changes-head button:hover { color: var(--text-normal); }
-.silica-changes-head button.silica-armed { color: var(--text-error); font-weight: 600; }
-.silica-changes-list { display: flex; flex-direction: column; }
+.silica-changes-count { flex: 1; min-width: 0; }
+button.silica-armed { color: var(--text-error); font-weight: var(--font-semibold); }
+.silica-changes-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
 
 .silica-change { display: flex; align-items: center; gap: var(--size-4-1); }
-.silica-change-toggle {
+button.silica-change-toggle {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--size-4-2);
-  background: none; box-shadow: none; border: none; padding: 2px var(--size-4-1);
-  font-size: var(--font-ui-smaller); text-align: left; cursor: pointer; color: var(--text-normal);
+  padding: 2px var(--size-4-1);
+  text-align: left; color: var(--text-normal);
 }
-.silica-change-toggle:hover:not(:disabled) { background: var(--background-modifier-hover); }
-.silica-change-toggle:disabled { cursor: default; opacity: 1; }
+button.silica-change-toggle:disabled { color: var(--text-normal); opacity: 0.65; }
+/* The chevron is the disclosure, so the row no longer relies on the reader
+   guessing that a filename is expandable. It rotates rather than swapping
+   glyphs: same element, so the state change is one motion. */
+.silica-change-chevron {
+  flex: none; display: inline-flex;
+  transition: transform var(--silica-dur) var(--silica-ease);
+}
+.silica-change-chevron .svg-icon { width: 13px; height: 13px; color: var(--text-faint); }
+.silica-change-open-chevron { transform: rotate(90deg); }
+.silica-change-toggle:disabled .silica-change-chevron { visibility: hidden; }
 .silica-change-path {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   direction: rtl; text-align: left; /* keep the filename visible when the path is long */
 }
-.silica-kind { flex: none; width: 1em; font-family: var(--font-monospace); font-weight: 600; }
+.silica-kind { flex: none; width: 1em; font-family: var(--font-monospace); font-weight: var(--font-semibold); }
 .silica-kind-create { color: var(--text-success); }
 .silica-kind-modify { color: var(--text-accent); }
 .silica-kind-delete, .silica-kind-rename { color: var(--text-muted); }
-.silica-plus, .silica-minus { flex: none; font-family: var(--font-monospace); font-size: var(--font-ui-smaller); }
+/* Monospace here is measurement, not costume: tabular figures keep the counts
+   in a column down the list instead of jittering per row. */
+.silica-plus, .silica-minus {
+  flex: none; font-family: var(--font-monospace); font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
 .silica-plus { color: rgb(var(--color-green-rgb, 68, 207, 110)); }
 .silica-minus { color: rgb(var(--color-red-rgb, 233, 49, 71)); }
-.silica-change-open {
-  flex: none; background: none; box-shadow: none; border: none; padding: 0 var(--size-4-1);
-  color: var(--text-muted); cursor: pointer;
-}
-.silica-change-open:hover:not(:disabled) { color: var(--text-normal); }
+.silica-change-open { flex: none; padding: var(--size-4-1); }
 
 .silica-diff {
   overflow-x: auto; margin: var(--size-4-1) 0 var(--size-4-2) var(--size-4-3);
-  border-left: 2px solid var(--background-modifier-border);
+  border-left: 1px solid var(--background-modifier-border);
   font-family: var(--font-monospace); font-size: var(--font-smaller); line-height: 1.45;
 }
 .silica-diff-track { width: max-content; min-width: 100%; }
@@ -78,8 +264,10 @@
   background: var(--background-modifier-hover); white-space: pre;
 }
 
-/* Inline review, inside the note. A left bar carries the same signal a gutter
-   mark would, without depending on the gutter being turned on at all. */
+/* --- Inline review, inside the note -------------------------------------- */
+
+/* A left bar carries the same signal a gutter mark would, without depending on
+   the gutter being turned on at all. */
 .silica-cm-added {
   background: rgba(var(--color-green-rgb, 68, 207, 110), 0.10);
   box-shadow: inset 2px 0 0 rgb(var(--color-green-rgb, 68, 207, 110));
@@ -109,55 +297,28 @@
   padding: 2px var(--size-4-2); font-size: var(--font-ui-smaller);
 }
 .silica-cm-tag { flex: 1; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.06em; }
-.silica-cm-btn {
+button.silica-cm-btn {
   background: none; box-shadow: none; border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-s); padding: 1px var(--size-4-2);
   font-size: var(--font-ui-smaller); color: var(--text-muted); cursor: pointer;
+  transition: color var(--silica-dur) var(--silica-ease),
+              border-color var(--silica-dur) var(--silica-ease),
+              background-color var(--silica-dur) var(--silica-ease);
 }
-.silica-cm-btn:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
-.silica-cm-accept:hover { border-color: rgb(var(--color-green-rgb, 68, 207, 110)); }
-.silica-cm-reject:hover { border-color: rgb(var(--color-red-rgb, 233, 49, 71)); }
+button.silica-cm-btn:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+button.silica-cm-accept:hover { border-color: rgb(var(--color-green-rgb, 68, 207, 110)); }
+button.silica-cm-reject:hover { border-color: rgb(var(--color-red-rgb, 233, 49, 71)); }
 
-/* --- Offline surfaces: related notes and the community graph ------------- */
+/* --- The note panel ------------------------------------------------------ */
 
 .silica-related { padding: var(--size-4-2); }
 .silica-related .silica-empty { color: var(--text-faint); font-size: var(--font-ui-smaller); }
-/* A row is a button so the list is keyboard reachable; the bar underlays the
-   text rather than sitting beside it, so a long title never squeezes it out. */
-.silica-related-row {
-  position: relative; display: flex; align-items: baseline; gap: var(--size-4-2);
-  width: 100%; padding: var(--size-4-1) var(--size-4-2); margin-bottom: 2px;
-  background: none; box-shadow: none; border: none; border-radius: var(--radius-s);
-  text-align: left; cursor: pointer; overflow: hidden;
-}
-.silica-related-row:hover { background: var(--background-modifier-hover); }
-.silica-related-name {
-  flex: 1; min-width: 0; color: var(--text-normal); font-size: var(--font-ui-small);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.silica-related-score { color: var(--text-faint); font-size: var(--font-ui-smaller); font-variant-numeric: tabular-nums; }
-.silica-related-bar {
-  position: absolute; left: 0; bottom: 0; height: 2px;
-  background: var(--interactive-accent); opacity: 0.55;
-}
-.silica-hit-path { display: block; color: var(--text-faint); }
-/* One line, never two: a snippet that wraps turns the result list into prose. */
-.silica-hit-snippet {
-  color: var(--text-muted); font-size: var(--font-ui-smaller);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.silica-hit-snippet mark {
-  background: none; color: var(--text-normal); font-weight: var(--font-semibold);
-}
-
-/* --- The note panel's toolbar and sections ------------------------------- */
-
 .silica-note-bar {
   display: flex; align-items: center; justify-content: space-between; gap: var(--size-4-2);
   padding-bottom: var(--size-4-2); margin-bottom: var(--size-4-1);
   border-bottom: 1px solid var(--background-modifier-border);
 }
-.silica-note-next { font-size: var(--font-ui-smaller); }
+.silica-note-next { display: inline-flex; align-items: center; gap: var(--size-4-1); }
 .silica-note-scope {
   display: inline-flex; align-items: center; gap: var(--size-4-1);
   color: var(--text-muted); font-size: var(--font-ui-smaller); cursor: pointer;
@@ -165,12 +326,19 @@
 /* Headings sit between rows, so they are sized like the rows rather than like
    note headings: a section label must not outweigh what it labels. */
 .silica-note-section {
-  margin: var(--size-4-3) 0 var(--size-4-1); color: var(--text-muted);
+  margin: var(--size-4-4) 0 var(--size-4-1); color: var(--text-faint);
   font-size: var(--font-ui-smaller); font-weight: var(--font-semibold);
   text-transform: uppercase; letter-spacing: 0.04em;
 }
 .silica-note-section:first-child { margin-top: 0; }
-.silica-note-flag { flex: 0 0 auto; color: var(--text-accent); font-size: var(--font-ui-smaller); }
+/* A related note nobody linked either way is the one worth a wikilink. It is an
+   inference, so it wears the accent — and it is a badge, not a button, so it
+   never competes with the row it sits in. */
+.silica-note-flag {
+  flex: 0 0 auto; padding: 0 4px; border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--silica-accent) 16%, transparent);
+  color: var(--silica-accent); font-size: var(--font-ui-smaller);
+}
 /* A broken link is text, not a target: it must not look clickable. */
 .silica-note-dead {
   padding: var(--size-4-1) var(--size-4-2); color: var(--text-muted);
@@ -178,20 +346,35 @@
   text-decoration-color: var(--text-faint);
 }
 
-.silica-graph { display: flex; flex-direction: column; height: 100%; }
-.silica-graph-bar {
-  display: flex; align-items: center; gap: var(--size-4-2); flex-wrap: wrap;
-  padding: var(--size-4-2); border-bottom: 1px solid var(--background-modifier-border);
+/* A row is a button so the list is keyboard reachable; the bar underlays the
+   text rather than sitting beside it, so a long title never squeezes it out. */
+button.silica-related-row {
+  position: relative; display: flex; align-items: baseline; gap: var(--size-4-2);
+  width: 100%; padding: var(--size-4-1) var(--size-4-2); margin-bottom: var(--size-4-1);
+  background: none; box-shadow: none; border: none; border-radius: var(--radius-s);
+  text-align: left; cursor: pointer; overflow: hidden;
+  transition: background-color var(--silica-dur) var(--silica-ease);
 }
-.silica-graph-legend { display: flex; align-items: center; gap: var(--size-4-3); flex-wrap: wrap; }
-.silica-graph-count { color: var(--text-muted); font-size: var(--font-ui-smaller); }
-.silica-graph-chip {
-  display: inline-flex; align-items: center; gap: var(--size-4-1);
-  color: var(--text-muted); font-size: var(--font-ui-smaller);
+button.silica-related-row:hover { background: var(--background-modifier-hover); }
+/* Lifted over the wash: see the note on .silica-related-bar. */
+.silica-related-name, .silica-related-dir, .silica-related-score, .silica-note-flag { position: relative; }
+.silica-related-name {
+  flex: 1; min-width: 0; color: var(--text-normal); font-size: var(--font-ui-small);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.silica-graph-dot { width: 8px; height: 8px; border-radius: 50%; }
-.silica-graph-canvas { flex: 1; width: 100%; min-height: 0; cursor: grab; }
-.silica-graph-canvas:active { cursor: grabbing; }
+.silica-related-score { color: var(--text-faint); font-size: var(--font-ui-smaller); font-variant-numeric: tabular-nums; }
+/* The overlap Silica computed, so it wears the accent rather than the theme's
+   control colour — but quietly. Two numbers here were set by looking at a real
+   sidebar of nineteen rows, not at one row: at the original 0.7 the stack of
+   cyan lines outshouted every title it was annotating, and a full-height wash
+   (tried as the fix) turned the panel into a bar chart with the notes inside
+   it. A 2px rule at 0.45 stays a measurement. The row's own bottom margin does
+   the rest: at 2px of separation the bar read as a divider between rows rather
+   than as the bottom edge of its own. */
+.silica-related-bar {
+  position: absolute; left: 0; bottom: 0; height: 2px;
+  background: var(--silica-accent); opacity: 0.45;
+}
 /* The disambiguating folder must never eat the title it disambiguates: it
    shrinks far faster than the name and is capped, so a deep path elides instead
    of squeezing the name out of the row entirely. */
@@ -201,16 +384,34 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left;
 }
 
-/* The offline features have no other affordance, so the row reads as a toolbar,
-   not as four submit buttons: quiet until hovered. */
-.silica-launchers { display: flex; gap: var(--size-4-1); flex-wrap: wrap; margin-bottom: var(--size-4-2); }
-.silica-launcher {
-  /* No grow. Any grow makes the leftover button on a wrapped line stretch across
-     the width, and no flex-basis fixes that at every sidebar size — it only moves
-     which size it happens at. Content-width buttons wrap cleanly at all of them. */
-  flex: 0 1 auto; padding: var(--size-4-1) var(--size-4-2);
-  background: none; box-shadow: none; border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-s); color: var(--text-muted);
-  font-size: var(--font-ui-smaller); cursor: pointer; white-space: nowrap;
+/* --- Ranked search ------------------------------------------------------- */
+
+.silica-hit-path { display: block; color: var(--text-faint); }
+/* One line, never two: a snippet that wraps turns the result list into prose. */
+.silica-hit-snippet {
+  color: var(--text-muted); font-size: var(--font-ui-smaller);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.silica-launcher:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+/* The matched term is what the reader is scanning for, so it is the one thing
+   in the row that is not muted. */
+.silica-hit-snippet mark {
+  background: none; color: var(--text-normal); font-weight: var(--font-semibold);
+}
+
+/* --- Community graph ----------------------------------------------------- */
+
+.silica-graph { display: flex; flex-direction: column; height: 100%; }
+.silica-graph-bar {
+  display: flex; align-items: center; gap: var(--size-4-2); flex-wrap: wrap;
+  padding: var(--size-4-2); border-bottom: 1px solid var(--background-modifier-border);
+}
+.silica-graph-rebuild { display: inline-flex; align-items: center; gap: var(--size-4-1); }
+.silica-graph-legend { display: flex; align-items: center; gap: var(--size-4-3); flex-wrap: wrap; }
+.silica-graph-count { color: var(--text-muted); font-size: var(--font-ui-smaller); font-variant-numeric: tabular-nums; }
+.silica-graph-chip {
+  display: inline-flex; align-items: center; gap: var(--size-4-1);
+  color: var(--text-muted); font-size: var(--font-ui-smaller);
+}
+.silica-graph-dot { width: 8px; height: 8px; border-radius: 50%; }
+.silica-graph-canvas { flex: 1; width: 100%; min-height: 0; cursor: grab; }
+.silica-graph-canvas:active { cursor: grabbing; }

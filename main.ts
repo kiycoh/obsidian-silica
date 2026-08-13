@@ -1,4 +1,4 @@
-import { App, ItemView, MarkdownRenderer, MarkdownView, Notice, Plugin, PluginSettingTab, WorkspaceLeaf, editorInfoField, normalizePath, type SettingDefinitionItem, type TFile } from "obsidian";
+import { App, ItemView, MarkdownRenderer, MarkdownView, Notice, Plugin, PluginSettingTab, WorkspaceLeaf, addIcon, editorInfoField, normalizePath, setIcon, type SettingDefinitionItem, type TFile } from "obsidian";
 import type { EditorView } from "@codemirror/view";
 
 import { BridgeClient, str, type BridgeInfo, type Frame, type SocketLike, type Status } from "./bridge.ts";
@@ -14,6 +14,38 @@ const BRIDGE_BASENAME = "silica-bridge.json";
 const MAX_CHANGED_FILES = 200; // a long /ingest run, not a memory leak
 const MAX_DIFF_LINES = 400; // per expanded file — a 5k-line overwrite must not stall the sidebar
 const CONFIRM_WINDOW = 5000; // ms an armed "Reject all" waits before standing down
+
+/** The plugin's own mark: the hexagonal cell silica crystallises into, which is
+ * also six nodes joined by six edges. One vertex is heavier — the note you are
+ * standing on.
+ *
+ * Drawn on Obsidian's 0 0 100 100 icon grid. The numbers were picked against a
+ * render of the mark beside lucide's own glyphs at 16/18/24/64px, not by eye on
+ * one big copy:
+ *
+ *   stroke 6.5  — a heavier ring closed the hexagon's hole at 16px and the mark
+ *                 turned into a blob; this reads lighter than lucide's stroke
+ *                 but the six filled discs put the mass back.
+ *   r 8 / 14    — the accent vertex is a bigger disc, not a ring. At the 16px a
+ *                 view tab renders, a ring's hole is under a pixel and mushes,
+ *                 while a size step survives every scale.
+ *   centre 52.5 — the accent disc hangs off the top vertex, so geometric centre
+ *                 is not optical centre; the whole figure drops 2.5 to put the
+ *                 ink in the middle of the box.
+ */
+const SILICA_ICON = "silica-lattice";
+const SILICA_ICON_SVG = `
+<g fill="none" stroke="currentColor" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M88 52.5 L69 19.6 L31 19.6 L12 52.5 L31 85.4 L69 85.4 Z" />
+</g>
+<g fill="currentColor">
+  <circle cx="88" cy="52.5" r="8" />
+  <circle cx="69" cy="19.6" r="8" />
+  <circle cx="12" cy="52.5" r="8" />
+  <circle cx="31" cy="85.4" r="8" />
+  <circle cx="69" cy="85.4" r="8" />
+  <circle cx="31" cy="19.6" r="14" />
+</g>`;
 
 interface SilicaSettings {
   portOverride: string;
@@ -44,7 +76,8 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
     this.registerEditorExtension(
       silicaDiff(this, (state) => state.field(editorInfoField, false)?.file?.path ?? null),
     );
-    this.addRibbonIcon("link", "Silica bridge", () => void this.activateView());
+    addIcon(SILICA_ICON, SILICA_ICON_SVG);
+    this.addRibbonIcon(SILICA_ICON, "Silica bridge", () => void this.activateView());
     // The graph is a destination, not a panel, so it gets the affordance core
     // Obsidian gives its own graph: an icon in the ribbon. Same glyph as the view
     // tab, which is what makes the two read as one thing.
@@ -452,6 +485,9 @@ function wrapSocket(ws: WebSocket): SocketLike {
 class BridgeView extends ItemView {
   plugin: SilicaBridgePlugin;
   private statusEl: HTMLElement | null = null;
+  private statusLabelEl!: HTMLElement;
+  private statusDetailEl!: HTMLElement;
+  private emptyEl: HTMLElement | null = null;
   private logEl!: HTMLElement;
   private inputEl!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
@@ -475,7 +511,7 @@ class BridgeView extends ItemView {
 
   getViewType(): string { return VIEW_TYPE; }
   getDisplayText(): string { return "Silica bridge"; }
-  getIcon(): string { return "link"; }
+  getIcon(): string { return SILICA_ICON; }
   async onOpen(): Promise<void> { this.build(); }
   async onClose(): Promise<void> { window.clearTimeout(this.confirmTimer); }
 
@@ -488,7 +524,7 @@ class BridgeView extends ItemView {
     // missed. They sit above the status line because they work whatever it says.
     const launchers = el.createDiv({ cls: "silica-launchers" });
     const launch = (label: string, tip: string, run: () => void) => {
-      const button = launchers.createEl("button", { cls: "silica-launcher", text: label });
+      const button = launchers.createEl("button", { cls: "silica-quiet silica-launcher", text: label });
       button.setAttribute("aria-label", tip);
       button.onclick = run;
     };
@@ -500,13 +536,21 @@ class BridgeView extends ItemView {
       void this.plugin.activateLeaf(GRAPH_VIEW, "tab"));
     launch("Autolink", "Link the titles this note mentions", () =>
       void this.plugin.autolinkActive());
+    // A dot and a sentence, not the raw enum: this line is on screen the whole
+    // time the panel is, so it is the plugin's most-read piece of copy.
     this.statusEl = el.createEl("p", { cls: "silica-status" });
+    this.statusEl.createSpan({ cls: "silica-status-dot" });
+    this.statusLabelEl = this.statusEl.createSpan({ cls: "silica-status-label" });
+    this.statusDetailEl = this.statusEl.createSpan({ cls: "silica-status-detail" });
     this.logEl = el.createDiv({ cls: "silica-log" });
+    this.renderEmpty();
     this.changesEl = el.createDiv({ cls: "silica-changes" });
     this.renderChanges();
     const row = el.createDiv({ cls: "silica-input-row" });
     this.inputEl = row.createEl("textarea", { attr: { rows: "2", placeholder: "Message Silica…" } });
-    this.sendBtn = row.createEl("button", { text: "Send" });
+    // Send is the primary action here, so it wears Obsidian's own primary
+    // button rather than looking like the Stop next to it.
+    this.sendBtn = row.createEl("button", { cls: "mod-cta", text: "Send" });
     this.stopBtn = row.createEl("button", { text: "Stop" });
     this.stopBtn.hide();
     this.sendBtn.onclick = () => this.sendChat();
@@ -519,12 +563,27 @@ class BridgeView extends ItemView {
     this.renderStatus();
   }
 
+  /** Until the first turn the log is an empty box under a toolbar, which reads
+   * as broken rather than as new. One line saying what the panel is for. */
+  private renderEmpty(): void {
+    this.emptyEl = this.logEl.createDiv({ cls: "silica-empty-chat" });
+    setIcon(this.emptyEl.createDiv(), SILICA_ICON);
+    this.emptyEl.createDiv({ text: "Ask Silica about the vault." });
+    this.emptyEl.createDiv({ text: "It reads your notes, and writes only where you let it." });
+  }
+
   renderStatus(): void {
     if (!this.statusEl) return; // status can fire before onOpen builds the DOM
     const s = this.plugin.status;
     if (s !== "connected" && this.turnId) this.abortTurn(s); // dropped mid-turn
-    const detail = this.plugin.statusDetail ? ` — ${this.plugin.statusDetail}` : "";
-    this.statusEl.setText(`${s}${detail}`);
+    // The class carries the colour, the word carries the state: the dot alone
+    // would put the whole signal on hue.
+    this.statusEl.className = `silica-status silica-status-${s}`;
+    this.statusLabelEl.setText({ connected: "Connected", connecting: "Connecting…", disconnected: "Disconnected" }[s]);
+    this.statusDetailEl.setText(this.plugin.statusDetail);
+    // The detail is the only place a dial error is ever shown, and it elides,
+    // so the full string has to survive on hover.
+    this.statusDetailEl.title = this.plugin.statusDetail;
     const blocked = s !== "connected" || this.turnId !== null;
     this.inputEl.disabled = blocked;
     this.sendBtn.disabled = blocked;
@@ -542,8 +601,12 @@ class BridgeView extends ItemView {
     if (!changes.length) return;
 
     const head = el.createDiv({ cls: "silica-changes-head" });
-    head.createSpan({ text: `${changes.length} file${changes.length === 1 ? "" : "s"} changed` });
+    head.createSpan({
+      cls: "silica-changes-count",
+      text: `${changes.length} file${changes.length === 1 ? "" : "s"} changed`,
+    });
     const accept = head.createEl("button", {
+      cls: "silica-quiet",
       text: "Accept all",
       attr: { "aria-label": "Keep every change and empty the list" },
     });
@@ -554,7 +617,7 @@ class BridgeView extends ItemView {
     // Two-step instead of a modal, and the armed state lives on the view so a
     // write landing mid-window repaints the header without losing it.
     const reject = head.createEl("button", {
-      cls: this.armed ? "silica-armed" : "",
+      cls: this.armed ? "silica-quiet silica-armed" : "silica-quiet",
       text: this.armed ? "Sure?" : "Reject all",
       // Not "revert what Silica did": the baseline goes back whole, so edits a
       // reader made after the write go with it. The per-hunk buttons are the
@@ -598,8 +661,14 @@ class BridgeView extends ItemView {
     const row = parent.createDiv({ cls: "silica-change" });
 
     // A real button, not a clickable div: every row has to be keyboard reachable.
-    const toggle = row.createEl("button", { cls: "silica-change-toggle" });
+    const toggle = row.createEl("button", { cls: "silica-quiet silica-change-toggle" });
     toggle.setAttribute("aria-label", `${c.kind} ${c.path}, ${added} added, ${removed} removed`);
+    // The chevron says the row opens. Without it the only affordance was that a
+    // filename happened to highlight on hover, which is not one.
+    const chevron = toggle.createSpan({
+      cls: open ? "silica-change-chevron silica-change-open-chevron" : "silica-change-chevron",
+    });
+    setIcon(chevron, "chevron-right");
     // Letter + colour + sign: the status never rides on colour alone.
     toggle.createSpan({ cls: `silica-kind silica-kind-${c.kind}`, text: c.kind[0].toUpperCase() });
     toggle.createSpan({ cls: "silica-change-path", text: c.from ? `${c.from} → ${c.path}` : c.path });
@@ -616,7 +685,8 @@ class BridgeView extends ItemView {
       toggle.disabled = true; // a rename moved bytes, it did not change them
     }
 
-    const reveal = row.createEl("button", { cls: "silica-change-open", text: "↗" });
+    const reveal = row.createEl("button", { cls: "silica-quiet silica-change-open" });
+    setIcon(reveal, "external-link");
     reveal.setAttribute("aria-label", `Open ${c.path}`);
     reveal.disabled = c.kind === "delete"; // in the trash — nothing to open
     reveal.onclick = () => void this.app.workspace.openLinkText(c.path, "", false);
@@ -647,6 +717,8 @@ class BridgeView extends ItemView {
   }
 
   private bubble(role: "user" | "silica"): HTMLElement {
+    this.emptyEl?.remove(); // the log has content now; it never comes back empty
+    this.emptyEl = null;
     const b = this.logEl.createDiv({ cls: `silica-msg silica-${role}` });
     this.logEl.scrollTop = this.logEl.scrollHeight;
     return b;
@@ -661,7 +733,7 @@ class BridgeView extends ItemView {
     const asst = this.bubble("silica");
     this.toolsEl = asst.createDiv({ cls: "silica-tools" });
     this.bodyEl = asst.createDiv({ cls: "silica-body" });
-    this.bodyEl.setText("…");
+    this.streaming("");
     this.turnId = crypto.randomUUID();
     this.turn = emptyTurn();
     this.plugin.client?.send({ type: "chat", turnId: this.turnId, text });
@@ -681,13 +753,27 @@ class BridgeView extends ItemView {
     if (!t) return;
     this.toolsEl.empty();
     for (const tool of t.tools) {
-      const glyph = tool.status === "done" ? "✓" : tool.status === "error" ? "✗" : "⏺";
-      this.toolsEl
-        .createDiv({ cls: `silica-tool silica-tool-${tool.status}` })
-        .setText(`${glyph} ${tool.label}${tool.error ? ` — ${tool.error}` : ""}`);
+      const row = this.toolsEl.createDiv({ cls: `silica-tool silica-tool-${tool.status}` });
+      // An icon rather than a text glyph: everything else in Obsidian's chrome
+      // is lucide, and ✓/✗/⏺ never match its weight at any font size.
+      setIcon(row, tool.status === "done" ? "check" : tool.status === "error" ? "x" : "circle");
+      // Two spans, not one string: the label holds a path and has to elide, but
+      // the reason an error gives is the whole point of the row and must not be
+      // what the ellipsis eats.
+      row.createSpan({ cls: "silica-tool-label", text: tool.label });
+      if (tool.error) row.createSpan({ cls: "silica-tool-reason", text: tool.error });
     }
-    if (!t.done) this.bodyEl.setText(t.text || "…");
+    if (!t.done) this.streaming(t.text);
     this.logEl.scrollTop = this.logEl.scrollHeight;
+  }
+
+  /** The answer as it arrives, with the caret that says more is coming. The
+   * caret is the only thing standing in for an empty body, so a turn that has
+   * not emitted a token yet still reads as working rather than as stuck. */
+  private streaming(text: string): void {
+    this.bodyEl.empty();
+    if (text) this.bodyEl.createSpan({ text });
+    this.bodyEl.createSpan({ cls: "silica-caret" });
   }
 
   private finishTurn(): void {
@@ -700,6 +786,9 @@ class BridgeView extends ItemView {
       // Render markdown (not the server's html) → clickable wikilinks, no innerHTML.
       void MarkdownRenderer.render(this.app, t?.answer || t?.text || "", this.bodyEl, "", this);
     }
+    // The answer landing is the one moment the plugin animates. It settles from
+    // where the streaming text already was, so nothing appears out of nowhere.
+    this.bodyEl.addClass("silica-in");
     this.turnId = null;
     this.turn = null;
     this.stopBtn.hide();
