@@ -12,6 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # What signing the assets costs: an OIDC token, which is the runner's own
+      # identity, and write access to the repository's attestation store.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,6 +29,18 @@ jobs:
           manifest=$(node -p "require('./manifest.json').version")
           [ "$manifest" = "$GITHUB_REF_NAME" ] || {
             echo "tag $GITHUB_REF_NAME != manifest $manifest"; exit 1; }
+      # main.js is a bundle nobody can read and styles.css ships verbatim, so a
+      # reader downloading either has no way to tell it came from this source.
+      # The attestation is that way: it binds each file's digest to this
+      # workflow, this commit and this runner, and
+      #   gh attestation verify main.js --repo kiycoh/obsidian-silica
+      # checks it. Before the upload, so a release is never published carrying an
+      # asset that failed to get one.
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            main.js
+            styles.css
       # Published, not draft: the installer ignores drafts, and `gh release edit
       # <tag>` cannot even reach one (that lookup resolves published tags only),
       # so a draft just adds a manual step that fails in a confusing way.
