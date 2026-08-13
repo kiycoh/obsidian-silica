@@ -1,7 +1,7 @@
 {
   "id": "silica-bridge",
   "name": "Silica Bridge",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "minAppVersion": "1.7.2",
   "description": "A panel tells you what your vault already knows about the note you have open: which notes are about the same thing, which say it twice, which links point at nothing. Search that ranks, bulk autolinking, a community graph. None of it calls a model.",
   "author": "kiycoh",
