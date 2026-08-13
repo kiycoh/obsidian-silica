@@ -151,6 +151,43 @@ export function rejectEdit(after: string, h: Hunk): { from: number; to: number; 
   return { from: offset(h.afterStart) - 1, to: after.length, insert: text ? `\n${text}` : "" };
 }
 
+/** A block's identity by content alone, which is how Silica's writing is told
+ * apart from the reader's. */
+const sig = (h: Hunk): string => JSON.stringify([h.removed, h.added]);
+
+/** Silica's blocks, as they stand in the note right now.
+ *
+ * `before → after` is what Silica wrote; `before → doc` is everything the note
+ * differs by, the reader's own typing included. A block is reviewable only if
+ * it is still character-for-character one of Silica's, so a paragraph the
+ * reader wrote — or wrote over — is theirs and never comes up for review.
+ * That is the whole rule: the reader's text is taken as it is. */
+export function silicaHunks(before: string, after: string, doc: string): Hunk[] {
+  const mine = new Set(hunkRanges(before, after).map(sig));
+  return hunkRanges(before, doc).filter((h) => mine.has(sig(h)));
+}
+
+/** `doc` with those blocks put back — the Reject button in bulk. Applied bottom
+ * -up, so the offsets of everything above each splice stay valid. */
+export function revertHunks(doc: string, list: Hunk[]): string {
+  let out = doc;
+  for (const h of [...list].reverse()) {
+    const { from, to, insert } = rejectEdit(out, h);
+    out = out.slice(0, from) + insert + out.slice(to);
+  }
+  return out;
+}
+
+/** Silica's version with one block taken back out, matched by content: a block
+ * rejected in the note has to leave `after` too, or `before === after` — the
+ * test that says a file is fully reviewed — never comes true.
+ * ponytail: two identical blocks in one file drop the first. Same text either
+ * way; only which position survives differs. */
+export function dropHunk(before: string, after: string, h: Hunk): string {
+  const match = hunkRanges(before, after).find((s) => sig(s) === sig(h));
+  return match ? revertHunks(after, [match]) : after;
+}
+
 export function tally(lines: DiffLine[]): { added: number; removed: number } {
   let added = 0;
   let removed = 0;

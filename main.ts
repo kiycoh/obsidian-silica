@@ -3,7 +3,7 @@ import type { EditorView } from "@codemirror/view";
 
 import { BridgeClient, str, type BridgeInfo, type Frame, type SocketLike, type Status } from "./bridge.ts";
 import { applyChatFrame, emptyTurn, type TurnState } from "./chat.ts";
-import { acceptInBaseline, diffLines, hunkRanges, hunks, rejectEdit, tally, type DiffLine, type Hunk } from "./diff.ts";
+import { acceptInBaseline, diffLines, dropHunk, hunks, rejectEdit, revertHunks, silicaHunks, tally, type DiffLine, type Hunk } from "./diff.ts";
 import { refreshEditors, silicaDiff, type DiffHost } from "./editorDiff.ts";
 import { autolinkNote, dispatchRpc, ensureFolder, RPC_METHODS, type Change, type RpcApp } from "./handlers.ts";
 import { buildCorpus, type Corpus, type CorpusVault } from "./corpus.ts";
@@ -278,7 +278,13 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
       this.changes.set(c.path, prev ? { ...prev, path: c.path, from: c.from } : c);
     } else {
       const prev = this.changes.get(c.path);
-      const before = prev ? prev.before : c.before;
+      // Whatever the reader typed since Silica's last write belongs in the
+      // baseline, not in the review: the baseline is the file as it stands with
+      // only Silica's still-pending blocks taken back out. Without this a second
+      // write would hand the reader their own paragraphs to accept or reject.
+      const before = prev
+        ? revertHunks(c.before, silicaHunks(prev.before, prev.after, c.before))
+        : c.before;
       // ponytail: an overwrite to "" therefore reads as a delete. The write path's
       // min-snippet gate means it does not happen, and the diff is all-red anyway.
       if (before === "" && c.after === "") this.changes.delete(c.path); // created, then gone
@@ -303,20 +309,22 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
     refreshEditors();
   }
 
-  // --- Inline review (DiffHost). The baseline `before` and the document as it
-  // stands are the whole state: blocks are recomputed from that pair, never
-  // tracked, so a reader's own edits need no bookkeeping.
+  // --- Inline review (DiffHost). The row's own pair — the baseline `before` and
+  // Silica's version `after` — is what review is over. The document is a third
+  // text that drifts from both as the reader types, and blocks are located in it
+  // rather than derived from it, which is what keeps the reader's own edits out
+  // of the review entirely.
 
   hunksFor(path: string, doc: string): Hunk[] {
     const c = this.changes.get(path);
     // A rename moved bytes without changing them, a delete left no editor open.
-    return c && c.kind !== "rename" && c.kind !== "delete" ? hunkRanges(c.before, doc) : [];
+    return c && c.kind !== "rename" && c.kind !== "delete" ? silicaHunks(c.before, c.after, doc) : [];
   }
 
   /** Accept: the baseline takes the block, the document keeps the bytes it has. */
-  acceptHunk(path: string, hunk: Hunk, doc: string): void {
+  acceptHunk(path: string, hunk: Hunk): void {
     const c = this.changes.get(path);
-    if (c) this.settle(path, acceptInBaseline(c.before, hunk), doc);
+    if (c) this.settle(path, acceptInBaseline(c.before, hunk), c.after);
   }
 
   /** Reject: one transaction, so Ctrl+Z brings Silica's version back. */
@@ -327,7 +335,9 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
     const doc = view.state.doc.toString();
     // Last block of a file Silica created: the empty file itself has to follow.
     if (c.kind === "create" && doc === "") void this.revertPaths([path]);
-    else this.settle(path, c.before, doc);
+    // Silica's version drops the block too — the row clears when the pair agrees,
+    // and the document is no longer the half being compared.
+    else this.settle(path, c.before, dropHunk(c.before, c.after, hunk));
   }
 
   /** Fold a reviewed pair back into the row, dropping it once the two agree. */
@@ -352,10 +362,7 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
    * transaction and Ctrl+Z brings Silica's version back, matching what the
    * per-hunk reject already does. */
   private async restore(file: TFile, text: string): Promise<void> {
-    const views = this.app.workspace
-      .getLeavesOfType("markdown")
-      .map((leaf) => leaf.view)
-      .filter((v): v is MarkdownView => v instanceof MarkdownView && v.file?.path === file.path);
+    const views = this.editorsFor(file.path);
     if (!views.length) {
       await this.app.vault.process(file, () => text);
       return;
@@ -371,6 +378,21 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
     await Promise.all(views.map((v) => v.save()));
   }
 
+  private editorsFor(path: string): MarkdownView[] {
+    return this.app.workspace
+      .getLeavesOfType("markdown")
+      .map((leaf) => leaf.view)
+      .filter((v): v is MarkdownView => v instanceof MarkdownView && v.file?.path === path);
+  }
+
+  /** The file as it stands now, read from the editor holding it when there is
+   * one — the same authority `restore` writes back through, and a save ahead of
+   * what disk would say. */
+  private async current(file: TFile): Promise<string> {
+    const [view] = this.editorsFor(file.path);
+    return view ? view.editor.getValue() : this.app.vault.read(file);
+  }
+
   /** Keep every write, forget the list. Nothing on disk moves. */
   acceptAll(): void {
     this.changes.clear();
@@ -381,8 +403,9 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
     return this.revertPaths([...this.changes.keys()]);
   }
 
-  /** Put files back the way they were before Silica touched them. One repaint at
-   * the end: a 200-file revert must not rebuild the panel 200 times. */
+  /** Take Silica's writing back out of these files, block by block, leaving
+   * whatever the reader wrote themselves exactly where it is. One repaint at the
+   * end: a 200-file revert must not rebuild the panel 200 times. */
   private async revertPaths(paths: string[]): Promise<void> {
     const { vault, fileManager } = this.app;
     const rpc = this.app as unknown as RpcApp; // same narrowing as onRpc
@@ -392,9 +415,7 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
       this.changes.delete(path);
       const file = vault.getFileByPath(path);
       try {
-        if (c.kind === "create") {
-          if (file) await fileManager.trashFile(file);
-        } else if (c.kind === "delete") {
+        if (c.kind === "delete") {
           await ensureFolder(rpc, path);
           if (file) await this.restore(file, c.before); // recreated meanwhile
           else await vault.create(path, c.before);
@@ -404,7 +425,15 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
             await fileManager.renameFile(file, c.from);
           }
         } else if (file) {
-          await this.restore(file, c.before);
+          // Only Silica's blocks come out, the same ones the inline buttons offer
+          // — so a file the reader kept working in comes back to their version of
+          // it, not to a snapshot from before they started.
+          const now = await this.current(file);
+          const left = revertHunks(now, silicaHunks(c.before, c.after, now));
+          // A file Silica created is only trashed if nothing of the reader's is
+          // left in it, which is the rule the last inline reject already follows.
+          if (c.kind === "create" && left === "") await fileManager.trashFile(file);
+          else await this.restore(file, left);
         }
       } catch (e) {
         new Notice(`Silica: could not revert ${path}: ${e instanceof Error ? e.message : String(e)}`);
@@ -619,13 +648,12 @@ class BridgeView extends ItemView {
     const reject = head.createEl("button", {
       cls: this.armed ? "silica-quiet silica-armed" : "silica-quiet",
       text: this.armed ? "Sure?" : "Reject all",
-      // Not "revert what Silica did": the baseline goes back whole, so edits a
-      // reader made after the write go with it. The per-hunk buttons are the
-      // surgical path; this one is the nuclear one and says so.
+      // It rejects every block at once, which is the only difference from the
+      // inline buttons: what the reader wrote themselves stays either way.
       attr: {
         "aria-label": this.armed
-          ? "Confirm restoring every touched file to its pre-Silica state"
-          : "Restore every touched file to how it was before Silica wrote, dropping your edits since",
+          ? "Confirm taking back every block Silica wrote"
+          : "Take back every block Silica wrote across all these files, keeping your own edits",
       },
     });
     reject.onclick = () => {

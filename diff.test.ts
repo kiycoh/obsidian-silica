@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { acceptInBaseline, diffLines, hunkRanges, hunks, rejectEdit, tally, type DiffLine, type Hunk } from "./diff.ts";
+import { acceptInBaseline, diffLines, dropHunk, hunkRanges, hunks, rejectEdit, revertHunks, silicaHunks, tally, type DiffLine, type Hunk } from "./diff.ts";
 
 const render = (lines: DiffLine[]) => lines.map((l) => l.op + l.text);
 
@@ -108,6 +108,56 @@ test("rejecting one hunk of many leaves the others standing", () => {
   assert.equal(hs.length, 2);
   assert.equal(splice(after, rejectEdit(after, hs[1])), "A\nb\nc\nd\ne"); // last line back, first still changed
   assert.equal(splice(after, rejectEdit(after, hs[0])), "a\nb\nc\nd\nE");
+});
+
+// Review is over (baseline, Silica's version). The document is a third text the
+// reader keeps typing into, and only blocks that are still exactly Silica's are
+// offered for review — the reader's own writing is taken as it is.
+test("the reader's own lines are not reviewable blocks", () => {
+  const before = "a\nb\nc";
+  const after = "a\nSILICA\nc"; // what Silica wrote
+  const doc = "a\nSILICA\nc\nMINE"; // the reader then added a line of their own
+  const hs = silicaHunks(before, after, doc);
+  assert.equal(hs.length, 1);
+  assert.deepEqual(hs[0].added, ["SILICA"]);
+  // Located in the document, not in `after`: the buttons splice against the doc.
+  assert.equal(splice(doc, rejectEdit(doc, hs[0])), "a\nb\nc\nMINE"); // their line survives
+});
+
+test("a block the reader typed over stops being Silica's", () => {
+  assert.deepEqual(silicaHunks("a\nb\nc", "a\nSILICA\nc", "a\nSILICA, edited\nc"), []);
+  // …and a note Silica never touched around the reader's work offers nothing.
+  assert.deepEqual(silicaHunks("a\nb", "a\nb", "a\nb\nMINE"), []);
+});
+
+test("taking back every block leaves the reader's own lines standing", () => {
+  // What "Reject all" is made of: revert Silica's blocks, located in the file as
+  // it stands rather than in the version Silica left behind.
+  const [before, after, now] = ["a\nb\nc", "a\nSILICA\nc", "a\nSILICA\nc\nMINE"];
+  assert.equal(revertHunks(now, silicaHunks(before, after, now)), "a\nb\nc\nMINE");
+  // A file Silica created and left alone comes back empty, which is the caller's
+  // cue to trash it.
+  assert.equal(revertHunks("SILICA", silicaHunks("", "SILICA", "SILICA")), "");
+  // But once the reader has written in that file there is no block to take back:
+  // an empty baseline makes the whole file one block, and a block they typed in
+  // is theirs. The file stays as it is rather than being trashed under them.
+  assert.deepEqual(silicaHunks("", "SILICA", "SILICA\nMINE"), []);
+});
+
+test("reverting every block puts the document back to the baseline", () => {
+  for (const [before, after] of PAIRS) {
+    assert.equal(revertHunks(after, hunkRanges(before, after)), before, `revert-all ${JSON.stringify(after)}`);
+  }
+});
+
+test("dropping every block from Silica's version leaves it agreeing with the baseline", () => {
+  for (const [before, after] of PAIRS) {
+    let version = after;
+    // One at a time, resolved by content against the shrinking version — which is
+    // exactly how the Reject button feeds them in, one click after another.
+    for (const h of hunkRanges(before, after)) version = dropHunk(before, version, h);
+    assert.equal(version, before, `drop-all ${JSON.stringify(after)}`);
+  }
 });
 
 test("past the LCS cap the changed middle degrades to remove-then-add, never wrong", () => {

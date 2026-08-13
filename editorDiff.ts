@@ -19,7 +19,7 @@ export const silicaRefresh = StateEffect.define<null>();
  * so main.ts can import this module without the import cycle going both ways. */
 export interface DiffHost {
   hunksFor(path: string, doc: string): Hunk[];
-  acceptHunk(path: string, hunk: Hunk, doc: string): void;
+  acceptHunk(path: string, hunk: Hunk): void;
   rejectHunk(path: string, hunk: Hunk, view: EditorView): void;
 }
 
@@ -169,7 +169,7 @@ export function silicaDiff(host: DiffHost, filePath: PathOf): Extension {
     const key = dom.dataset.silicaKey;
     const hunk = hunks.find((h) => keyOf(path, h) === key) ?? hunks.find((h) => widgetPos(doc, h) === view.posAtDOM(dom));
     if (!hunk) return;
-    if (accept) host.acceptHunk(path, hunk, text);
+    if (accept) host.acceptHunk(path, hunk);
     else host.rejectHunk(path, hunk, view);
   };
 
