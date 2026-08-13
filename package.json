@@ -1,20 +1,27 @@
 {
   "name": "silica-bridge",
   "version": "0.3.1",
-  "description": "Bridge the Silica knowledge-graph agent to an Obsidian vault over a local WebSocket.",
+  "description": "Silica's graph algorithms on an Obsidian vault: relatedness, near-duplicates, orphans, ranked search, autolinking and communities, with no model.",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
+    "lint": "eslint .",
     "test": "node --test *.test.ts"
   },
-  "keywords": ["obsidian-plugin", "silica"],
+  "keywords": [
+    "obsidian-plugin",
+    "silica"
+  ],
   "license": "MIT",
   "devDependencies": {
     "@codemirror/state": "^6.5.0",
     "@codemirror/view": "^6.38.0",
     "@types/node": "^24",
     "esbuild": "^0.25.0",
-    "obsidian": "^1.7.2",
-    "typescript": "^5.6.0"
+    "eslint": "^10.8.1",
+    "eslint-plugin-obsidianmd": "^0.4.1",
+    "obsidian": "^1.13.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.67.0"
   }
 }

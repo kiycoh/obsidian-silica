@@ -204,7 +204,7 @@ export async function buildCorpus(vault: CorpusVault, prev?: Corpus | null): Pro
     let len = 0;
     for (const [s, n] of row) {
       let byPath = postings.get(s);
-      if (!byPath) postings.set(s, (byPath = new Map()));
+      if (!byPath) postings.set(s, (byPath = new Map<string, number>()));
       byPath.set(path, n);
       len += n;
     }

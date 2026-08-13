@@ -16,7 +16,7 @@ interface Level {
 }
 
 function levelFrom(size: number, pairs: Array<[number, number, number]>): Level {
-  const w: Array<Map<number, number>> = Array.from({ length: size }, () => new Map());
+  const w: Array<Map<number, number>> = Array.from({ length: size }, () => new Map<number, number>());
   for (const [a, b, weight] of pairs) {
     w[a].set(b, (w[a].get(b) ?? 0) + weight);
     if (a !== b) w[b].set(a, (w[b].get(a) ?? 0) + weight);

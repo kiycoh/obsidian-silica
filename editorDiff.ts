@@ -118,8 +118,9 @@ class HunkWidget extends WidgetType {
   }
 
   toDOM(view: EditorView): HTMLElement {
-    const box = document.createElement("div");
-    box.addClass("silica-cm-hunk");
+    // `silica-cm-cut` rather than a `:has(.silica-cm-removed)` rule: the widget
+    // already knows whether it dropped lines, and `:has` invalidates broadly.
+    const box = createDiv({ cls: this.removed.length ? "silica-cm-hunk silica-cm-cut" : "silica-cm-hunk" });
     // The key rides on the node so a click resolves to its own hunk. Two hunks
     // inside one callout hoist to the same position, and a position alone would
     // send both clicks to whichever came first.

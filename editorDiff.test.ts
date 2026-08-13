@@ -23,7 +23,7 @@ function layout(before: string, after: string): Array<[number, string]> {
   const ranges = hunkDecorations(doc, hunkRanges(before, after), () => new Stub());
   return ranges.map((r) => [
     doc.lineAt(r.from).number,
-    r.value.spec.widget ? "block" : "added",
+    (r.value.spec as { widget?: unknown }).widget ? "block" : "added",
   ]);
 }
 

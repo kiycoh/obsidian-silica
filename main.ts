@@ -1,4 +1,4 @@
-import { App, ItemView, MarkdownRenderer, MarkdownView, Notice, Plugin, PluginSettingTab, WorkspaceLeaf, addIcon, editorInfoField, normalizePath, setIcon, type SettingDefinitionItem, type TFile } from "obsidian";
+import { App, ItemView, MarkdownRenderer, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, WorkspaceLeaf, addIcon, editorInfoField, normalizePath, setIcon, type SettingDefinitionItem, type TFile } from "obsidian";
 import type { EditorView } from "@codemirror/view";
 
 import { BridgeClient, str, type BridgeInfo, type Frame, type SocketLike, type Status } from "./bridge.ts";
@@ -218,22 +218,19 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
     if (this.client) return;
     this.client = new BridgeClient({
       readBridgeInfo: async () => {
-        // `configDir` is user-overridable, but the writer (`silica connect`, the
-        // Python side) targets a literal `.obsidian/`. Read the configured dir
-        // first so an override works the day the writer learns about it, then
-        // fall back to where the handshake file actually lands today.
-        for (const dir of new Set([this.app.vault.configDir, ".obsidian"])) {
-          let info: BridgeInfo;
-          try {
-            const raw = await this.app.vault.adapter.read(`${dir}/${BRIDGE_BASENAME}`);
-            info = JSON.parse(raw) as BridgeInfo;
-          } catch {
-            continue; // absent or unreadable — try the next location
-          }
-          const override = this.settings.portOverride.trim();
-          return override ? { ...info, port: Number(override) } : info;
+        // The config folder is whatever the vault says it is, not `.obsidian`:
+        // a vault that renamed it is the one case where a hardcoded path would
+        // silently never connect. The writer (`silica connect`, the Python
+        // side) resolves the same way.
+        let info: BridgeInfo;
+        try {
+          const raw = await this.app.vault.adapter.read(`${this.app.vault.configDir}/${BRIDGE_BASENAME}`);
+          info = JSON.parse(raw) as BridgeInfo;
+        } catch {
+          return null; // absent or unreadable — no session running yet
         }
-        return null; // no session running yet
+        const override = this.settings.portOverride.trim();
+        return override ? { ...info, port: Number(override) } : info;
       },
       connect: (url) => wrapSocket(new WebSocket(url)),
       // Popout windows get their own timer scope; `window` is the correct one.
@@ -844,8 +841,11 @@ class BridgeView extends ItemView {
   }
 }
 
+const PORT_DESC = "Leave empty to use the port from silica-bridge.json.";
+
 // Declarative settings (Obsidian 1.13+): getSettingDefinitions replaces the
 // deprecated display(); getControlValue/setControlValue bind keys to our store.
+// display() stays for 1.7.2–1.12, which never calls the declarative path.
 class SilicaSettingTab extends PluginSettingTab {
   plugin: SilicaBridgePlugin;
 
@@ -855,15 +855,34 @@ class SilicaSettingTab extends PluginSettingTab {
   }
 
   getSettingDefinitions(): SettingDefinitionItem[] {
-    const detail = this.plugin.statusDetail ? ` — ${this.plugin.statusDetail}` : "";
     return [
-      { name: "Connection status", desc: `${this.plugin.status}${detail}` },
+      { name: "Connection status", desc: this.statusDesc() },
       {
         name: "Port override",
-        desc: "Leave empty to use the port from silica-bridge.json.",
+        desc: PORT_DESC,
         control: { type: "text", key: "portOverride", placeholder: "Auto" },
       },
     ];
+  }
+
+  /** Obsidian before 1.13 ignores getSettingDefinitions entirely, and
+   * `minAppVersion` is 1.7.2: the same two rows, drawn by hand. */
+  display(): void {
+    this.containerEl.empty();
+    new Setting(this.containerEl).setName("Connection status").setDesc(this.statusDesc());
+    new Setting(this.containerEl)
+      .setName("Port override")
+      .setDesc(PORT_DESC)
+      .addText((text) =>
+        text
+          .setPlaceholder("Auto")
+          .setValue(this.plugin.settings.portOverride)
+          .onChange((value) => void this.setControlValue("portOverride", value)),
+      );
+  }
+
+  private statusDesc(): string {
+    return this.plugin.statusDetail ? `${this.plugin.status} — ${this.plugin.statusDetail}` : this.plugin.status;
   }
 
   getControlValue(key: string): unknown {

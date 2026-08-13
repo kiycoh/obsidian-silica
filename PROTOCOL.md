@@ -10,7 +10,9 @@ open — either side sends frames at any time. `protocolVersion` below is `1`.
 ## Connection lifecycle
 
 1. `silica connect` binds `ws://127.0.0.1:<port>` and writes
-   `<vault>/.obsidian/silica-bridge.json` (mode 0600):
+   `<vault>/<config-dir>/silica-bridge.json` (mode 0600), where `<config-dir>`
+   is the vault's configuration folder — `.obsidian` unless the vault renamed
+   it, which the plugin resolves through `Vault#configDir`:
    `{ "port": <int>, "token": "<hex>", "pid": <int>, "protocolVersion": 1 }`.
 2. The plugin reads that file via `vault.adapter.read`, dials the port, and sends
    `hello`. The server validates the token and `protocolVersion`, then replies

@@ -276,7 +276,7 @@ button.silica-change-toggle:disabled { color: var(--text-normal); opacity: 0.65;
 .silica-cm-hunk { margin: var(--size-4-1) 0; }
 /* A pure insertion carries only its toolbar; a block that really dropped lines
    gets the red bar, so the two cases never look alike. */
-.silica-cm-hunk:has(.silica-cm-removed) {
+.silica-cm-hunk.silica-cm-cut {
   border-left: 2px solid rgb(var(--color-red-rgb, 233, 49, 71));
   background: rgba(var(--color-red-rgb, 233, 49, 71), 0.10);
 }
@@ -344,7 +344,6 @@ button.silica-cm-reject:hover { border-color: rgb(var(--color-red-rgb, 233, 49, 
 .silica-note-dead {
   padding: var(--size-4-1) var(--size-4-2); color: var(--text-muted);
   font-size: var(--font-ui-small); text-decoration: line-through;
-  text-decoration-color: var(--text-faint);
 }
 
 /* A row is a button so the list is keyboard reachable; the bar underlays the

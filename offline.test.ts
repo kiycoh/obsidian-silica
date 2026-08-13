@@ -85,7 +85,7 @@ test("a rebuild re-reads only the files whose mtime moved", async () => {
   const spy = (mtimes: Record<string, number>): CorpusVault => {
     const base = makeVault(files, mtimes);
     return {
-      getMarkdownFiles: base.getMarkdownFiles,
+      getMarkdownFiles: () => base.getMarkdownFiles(),
       cachedRead: async (f) => {
         reads.push(f.path);
         return base.cachedRead(f);

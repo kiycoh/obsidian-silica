@@ -114,8 +114,13 @@ export function hunkRanges(before: string, after: string): Hunk[] {
     }
     // A run may interleave `-` and `+`, but each side still advances
     // contiguously, so one range per side covers the whole run.
-    if (l.op === "-") cur.beforeEnd = ++b, cur.removed.push(l.text);
-    else cur.afterEnd = ++a, cur.added.push(l.text);
+    if (l.op === "-") {
+      cur.beforeEnd = ++b;
+      cur.removed.push(l.text);
+    } else {
+      cur.afterEnd = ++a;
+      cur.added.push(l.text);
+    }
   }
   return out;
 }

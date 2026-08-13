@@ -74,7 +74,8 @@ cd /path/to/your/vault
 silica connect
 ```
 
-`silica connect` writes `<vault>/.obsidian/silica-bridge.json` (mode `0600`) with
+`silica connect` writes `silica-bridge.json` into the vault's configuration
+folder — `.obsidian`, unless the vault renamed it — (mode `0600`) with
 the port and a per-session token. The plugin reads that file, connects, and shows
 `connected` in the panel.
 
