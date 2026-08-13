@@ -130,7 +130,8 @@ button.silica-launcher:hover:not(:disabled) { background: var(--background-modif
   white-space: pre-wrap;
 }
 .silica-silica { align-self: stretch; }
-.silica-body { white-space: pre-wrap; }
+/* Only the streaming tokens keep their own newlines; see the note in main.ts. */
+.silica-stream { white-space: pre-wrap; }
 .silica-body > :first-child { margin-top: 0; }
 .silica-body > :last-child { margin-bottom: 0; }
 .silica-error { color: var(--text-error); }

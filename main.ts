@@ -732,7 +732,10 @@ class BridgeView extends ItemView {
     this.bubble("user").setText(text);
     const asst = this.bubble("silica");
     this.toolsEl = asst.createDiv({ cls: "silica-tools" });
-    this.bodyEl = asst.createDiv({ cls: "silica-body" });
+    // `markdown-rendered` is what Obsidian's own typography hangs off: without it
+    // a blockquote falls back to the browser's 40px indent and a code fence to no
+    // styling at all, which is the answer looking nothing like the note beside it.
+    this.bodyEl = asst.createDiv({ cls: "silica-body markdown-rendered" });
     this.streaming("");
     this.turnId = crypto.randomUUID();
     this.turn = emptyTurn();
@@ -772,7 +775,12 @@ class BridgeView extends ItemView {
    * not emitted a token yet still reads as working rather than as stuck. */
   private streaming(text: string): void {
     this.bodyEl.empty();
-    if (text) this.bodyEl.createSpan({ text });
+    // Raw tokens, so the newlines in them are the only structure there is and
+    // have to survive. The class carries that, not the body: once the markdown
+    // is rendered the newlines BETWEEN its blocks become text nodes of their
+    // own, and a body still set to pre-wrap paints every one of them as a blank
+    // line — the answer arrives correctly spaced and then doubles.
+    if (text) this.bodyEl.createSpan({ cls: "silica-stream", text });
     this.bodyEl.createSpan({ cls: "silica-caret" });
   }
 
