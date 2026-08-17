@@ -10,12 +10,13 @@ import {
   inDegrees,
   nearDuplicates,
   noteSignals,
+  PROPOSE_TAU,
   staleLinks,
   unlinkedNeighbours,
   type LinkTables,
 } from "./attention.ts";
 import { buildCorpus, discriminatingSets, type CorpusFile, type CorpusVault } from "./corpus.ts";
-import { TAU, relatedTo } from "./correlate.ts";
+import { TAU, TEMPLATE_TAU, jaccard, relatedTo } from "./correlate.ts";
 import { inScope, snippet, splitScope } from "./lexical.ts";
 
 function makeVault(files: Record<string, string>): CorpusVault {
@@ -130,6 +131,42 @@ test("the template gate keeps filler notes out of the link proposals", async () 
   // the template IS their top-30. Nothing may be proposed between them.
   assert.equal(unlinkedNeighbours(corpus, NO_LINKS, "filler-3.md").length, 0);
   assert.equal(adoptableOrphans(corpus, NO_LINKS, "filler-3.md").length, 0);
+});
+
+// A pair in the band between the two gates: it shares one real word out of
+// thirteen each, so it clears correlate's template floor (0.02) and sits under
+// the proposal bar (0.08). 0.3.3 deleted the proposal bar and let this class
+// through, which is what doubled every orphan count on a real vault.
+const THIN: Record<string, string> = {
+  "thin-a.md": `${BOILER} shared alpha bravo charlie delta echo foxtrot golf hotel india juliett kilo`,
+  "thin-b.md": `${BOILER} shared mike november oscar papa quebec romeo sierra tango uniform victor whiskey`,
+  "thick-a.md": `${BOILER} ${ROCKS}`,
+  "thick-b.md": `${BOILER} ${ROCKS_NEAR}`,
+};
+for (let i = 0; i < 20; i++) THIN[`filler-${i}.md`] = `${BOILER} unique${"x".repeat(i + 1)}`;
+
+test("a proposal answers to PROPOSE_TAU, four times the template floor", async () => {
+  const corpus = await corpusOf(THIN);
+  const sets = discriminatingSets(corpus);
+  const disc = (a: string, b: string) => jaccard(sets.get(a) ?? new Set(), sets.get(b) ?? new Set());
+
+  // The band this test exists to cover — assert it, so a fixture that drifts
+  // out of it fails loudly instead of passing for the wrong reason.
+  const thin = disc("thin-a.md", "thin-b.md");
+  assert.ok(thin >= TEMPLATE_TAU && thin < PROPOSE_TAU, `thin pair at ${thin}`);
+  assert.ok(disc("thick-a.md", "thick-b.md") >= PROPOSE_TAU, `thick pair at ${disc("thick-a.md", "thick-b.md")}`);
+
+  // The related list still carries the thin pair: the pane is a list, not a
+  // claim, and dropping it there is what emptied panes on a real vault.
+  assert.ok(relatedTo(corpus, "thin-a.md").some((r) => r.path === "thin-b.md"));
+  // The proposals do not.
+  assert.deepEqual(adoptableOrphans(corpus, NO_LINKS, "thin-a.md").map((r) => r.path), []);
+  assert.deepEqual(unlinkedNeighbours(corpus, NO_LINKS, "thin-a.md").map((r) => r.path), []);
+  // The thick pair is proposed, so the bar is a bar and not an off switch.
+  assert.deepEqual(adoptableOrphans(corpus, NO_LINKS, "thick-a.md").map((r) => r.path), ["thick-b.md"]);
+
+  // And the queue, which reads eachPair directly and gates by hand.
+  assert.equal(attentionQueue(corpus, NO_LINKS, 100).some((r) => r.path.startsWith("thin-")), false);
 });
 
 // A daily note that spent the day on the granite note: three rock words out of

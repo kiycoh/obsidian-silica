@@ -7,7 +7,7 @@
 // No Obsidian import, so `node --test` drives all of it.
 
 import { discriminatingSets, type Corpus } from "./corpus.ts";
-import { LIST_TAU, TAU, TEMPLATE_TAU, eachPair, jaccard, relatedTo, type Related } from "./correlate.ts";
+import { LIST_TAU, TAU, eachPair, jaccard, relatedTo, type Related } from "./correlate.ts";
 
 /** Obsidian's link tables: source -> target -> count. `unresolved` keys targets
  * by their raw link text, since by definition there is no file to name. */
@@ -34,6 +34,39 @@ export const STALE_TAU = 0.02;
 /** Past this many outgoing links a note is an index, and its links are its job,
  * not a mistake. */
 export const INDEX_OUT_DEGREE = 12;
+/** The bar a *proposal* answers to on the discriminating stem sets, above and
+ * beyond correlate's TEMPLATE_TAU.
+ *
+ * The two gates do different jobs and only one of them is measurable from the
+ * vault. TEMPLATE_TAU (0.02) exists to drop pairs that share literally nothing
+ * once the ubiquitous stems are culled — a class that sits at zero, so the bar
+ * only has to be above it. Proposing a link is a claim about two notes, and
+ * there the question is not "is this pair template noise" but "would a person
+ * agree", which needs a label.
+ *
+ * The label every vault already carries is its own wikilinks: a written pair is
+ * two notes a human decided belong together. Over the candidate pairs this layer
+ * sees, Youden's J between written and unwritten pairs peaks at 0.102 on a
+ * 1199-note vault, 0.085 on a 797-note one and 0.075 on an 882-note one. 0.08 is
+ * inside or within two points of all three.
+ *
+ * Note what the measurement rules OUT, which is the useful half: below 0.05 the
+ * gate keeps written and unwritten pairs at the same rate — lift 1.00 on all
+ * three vaults — so it is pure volume there and buys nothing. Do not "relax" it
+ * to TEMPLATE_TAU again; that is 0.3.3's mistake and it doubled every proposal
+ * count without adding one proposal a reader would take.
+ *
+ * The elbow of the retention curve says nothing here — Kneedle on it moves from
+ * 0.08 to 0.26 depending only on where the grid stops. Re-measure with labels,
+ * not with volume.
+ *
+ * It inherits TEMPLATE_TAU's ceiling and cannot be raised out of it. On the
+ * journal fixture a daily-note pair sits at 0.111 when the journal is 60% of the
+ * vault and at 0.784 when it is 14% — the DF cull only reaches the template once
+ * the journal crosses DF_MAX, and under that no bar short of 0.79 touches the
+ * class, which would take every real vault with it. Excluded folders are the
+ * answer there, not this number. */
+export const PROPOSE_TAU = 0.08;
 /** Fusion constant, same role as lexical.ts: it damps ranks, nothing else. */
 const RRF_K = 60;
 
@@ -60,7 +93,13 @@ const isWritten = (links: LinkTables, a: string, b: string): boolean =>
 // Every proposal here starts from relatedTo, which carries correlate's template
 // gate: the top-30 of a note written from a template IS the template, and on a
 // vault of daily notes raw CORRELATE relates every note to every other at 0.7.
-// Nothing below has to re-check that — it cannot reach a pair the gate dropped.
+// That gate clears the floor; it does not set the bar a proposal answers to,
+// which is PROPOSE_TAU and four times higher.
+
+/** Whether a pair overlaps enough, once the vault's ubiquitous stems are gone,
+ * to be worth putting in front of a reader as a proposal. */
+const worthProposing = (sets: Map<string, Set<string>>, a: string, b: string): boolean =>
+  jaccard(sets.get(a) ?? EMPTY, sets.get(b) ?? EMPTY) >= PROPOSE_TAU;
 
 /** Near-duplicates of one note. Whole discriminating sets, high bar; candidates
  * still come from the top-k inverted index, because two notes near enough to be
@@ -88,10 +127,11 @@ export function adoptableOrphans(
   tau = ORPHAN_TAU,
 ): Related[] {
   const deg = inDegrees(links);
+  const sets = discriminatingSets(corpus);
   // A note this one already links has in-degree >= 1, so the link check is the
   // orphan check: no second filter needed.
   return relatedTo(corpus, path, Infinity, tau)
-    .filter((r) => !deg.get(r.path))
+    .filter((r) => !deg.get(r.path) && worthProposing(sets, path, r.path))
     .slice(0, limit);
 }
 
@@ -102,10 +142,14 @@ export function adoptableOrphans(
  * is not being made: nobody else's pane, graph or queue can ever show these
  * rows, so they are a suggestion to the one reader who opened a dashboard and
  * asked what the vault holds on the day. That reader wants the loose ones — the
- * tight ones are the notes they already linked on their way in. */
+ * tight ones are the notes they already linked on their way in. PROPOSE_TAU is
+ * dropped there for the same reason it applies here: it is the bar of a claim,
+ * and out of an excluded note no claim is being made. */
 export function unlinkedNeighbours(corpus: Corpus, links: LinkTables, path: string, limit = 10): Related[] {
-  return relatedTo(corpus, path, Infinity, corpus.excluded.has(path) ? LIST_TAU : TAU)
-    .filter((r) => !isWritten(links, path, r.path))
+  const loose = corpus.excluded.has(path);
+  const sets = discriminatingSets(corpus);
+  return relatedTo(corpus, path, Infinity, loose ? LIST_TAU : TAU)
+    .filter((r) => !isWritten(links, path, r.path) && (loose || worthProposing(sets, path, r.path)))
     .slice(0, limit);
 }
 
@@ -222,9 +266,11 @@ export function attentionQueue(corpus: Corpus, links: LinkTables, limit = 100): 
       bump("duplicates", b, dup);
       return; // a copy is not also a missing link: say the bigger thing once
     }
-    // The sweep reads eachPair directly rather than relatedTo, so the template
-    // gate is applied here by hand — on `dup`, which is already computed.
-    if (isWritten(links, a, b) || dup < TEMPLATE_TAU) return; // linked, or template overlap only
+    // The sweep reads eachPair directly rather than relatedTo, so the gate is
+    // applied here by hand — on `dup`, which is already computed. Everything
+    // below this line is a proposal, so it is PROPOSE_TAU, not the template
+    // floor: a queue row costs a reader more than a list row, not less.
+    if (isWritten(links, a, b) || dup < PROPOSE_TAU) return; // linked, or too thin to propose
     if (score >= TAU) {
       bump("missing", a, score);
       bump("missing", b, score);
