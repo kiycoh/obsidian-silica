@@ -112,8 +112,17 @@ export function unlinkedNeighbours(corpus: Corpus, links: LinkTables, path: stri
 /** Links written out of this note whose target shares almost no vocabulary with
  * it, usually the residue of a note that changed underneath the link. Index
  * notes are exempt: pointing at things they have nothing in common with is what
- * an index is for. */
+ * an index is for.
+ *
+ * An excluded note is exempt on the same grounds, by declaration rather than by
+ * out-degree. A daily note is a dashboard: its links are to-dos and pointers,
+ * about the day and not about the target, so the metric reads every honest one
+ * as substanceless once the target is a real note — measured at 0.014 for a
+ * 100-word target and 0.005 for a 400-word one, against a 0.02 bar. The
+ * out-degree exemption cannot catch it, because a day writes two links, not
+ * thirteen. */
 export function staleLinks(corpus: Corpus, links: LinkTables, path: string, tau = STALE_TAU): Related[] {
+  if (corpus.excluded.has(path)) return [];
   const targets = Object.keys(links.resolved[path] ?? {});
   if (targets.length > INDEX_OUT_DEGREE) return [];
   const sets = discriminatingSets(corpus);
@@ -226,7 +235,12 @@ export function attentionQueue(corpus: Corpus, links: LinkTables, limit = 100): 
 
   for (const [path, targets] of Object.entries(links.unresolved)) {
     const n = Object.keys(targets).length;
-    if (n && corpus.counts.has(path)) bump("dangling", path, n, n);
+    // Excluded here too, and this is the branch that has to say so out loud: it
+    // is the one signal that never touches a pair, so eachPair's skip above
+    // cannot cover it. A journal is where unresolved link text is deliberate —
+    // you type tomorrow's note name today — and it is the commonest thing in the
+    // vault, so without this the queue is half diary and Next opens it first.
+    if (n && corpus.counts.has(path) && !corpus.excluded.has(path)) bump("dangling", path, n, n);
   }
 
   const fused = new Map<string, number>();

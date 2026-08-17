@@ -160,6 +160,30 @@ test("a proposal out of an excluded note answers to the suggestion bar", async (
   assert.equal(unlinkedNeighbours(corpus, written, day).some((r) => r.path === "geo/granite.md"), false);
 });
 
+test("an excluded note files no row in the queue, broken links included", async () => {
+  const day = "journal/2026-08-01.md";
+  // Typing tomorrow's note name today is what a journal IS, and it is the one
+  // signal that never touches a pair — so the sweep's skip cannot cover it.
+  const links: LinkTables = { resolved: {}, unresolved: { [day]: { "Standup with Ada": 1, "Project Fizz": 1 } } };
+  const vault = makeVault(DASHBOARD_VAULT);
+  assert.ok(attentionQueue(await buildCorpus(vault), links).some((r) => r.path === day));
+
+  const corpus = await buildCorpus(vault, null, ["journal"]);
+  assert.equal(attentionQueue(corpus, links).some((r) => r.path === day), false);
+  // The note itself is still told: this is the queue's business, not the pane's.
+  assert.deepEqual(danglingLinks(links, day), ["Project Fizz", "Standup with Ada"]);
+});
+
+test("an excluded note's own links are its job, whatever their overlap", async () => {
+  const day = "journal/2026-08-01.md";
+  // A day that writes down a to-do: about the day, not about the target. The
+  // out-degree exemption cannot catch it — a day writes one link, not thirteen.
+  const links: LinkTables = { resolved: { [day]: { "geo/quartz.md": 1 } }, unresolved: {} };
+  const vault = makeVault({ ...DASHBOARD_VAULT, [day]: `${DIARY} dentist groceries mother rain novel` });
+  assert.deepEqual(staleLinks(await buildCorpus(vault), links, day).map((r) => r.path), ["geo/quartz.md"]);
+  assert.deepEqual(staleLinks(await buildCorpus(vault, null, ["journal"]), links, day), []);
+});
+
 test("a written link either way retires the proposal", async () => {
   const corpus = await corpusOf(TEMPLATED);
   const has = (links: LinkTables) =>
