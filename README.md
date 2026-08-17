@@ -126,15 +126,17 @@ terminal is reviewable in the same place.
   notes, never draws an inferred edge on the community graph and never files a
   row in attention — but its own related pane still works, so a daily note goes
   on suggesting what the vault holds on what you wrote today, and two excluded
-  notes can never relate to each other. Made for journals and other templated
-  notes: notes written from the same template share most of their vocabulary, so
-  they all relate to each other. Stems the whole vault uses are dropped from the
-  comparison automatically, which handles a big templated class on its own; below
-  about a quarter of the vault that share is too small to cull anything, and
-  declaring the folder is the fix. Search still finds the excluded notes, and
-  their written wikilinks stay on the graph. Until you edit the field it follows
-  your Daily notes folder automatically, so the common case needs no setup; clear
-  it to exclude nothing.
+  notes can never relate to each other. In that pane the `unlinked` marker
+  answers to the softer of the two thresholds, since nothing outside it can act
+  on the suggestion anyway. Made for journals and other templated notes: notes
+  written from the same template share most of their vocabulary, so they all
+  relate to each other. Stems the whole vault uses are dropped from the
+  comparison automatically, which handles a big templated class on its own;
+  below about a quarter of the vault that share is too small to cull anything,
+  and declaring the folder is the fix. Search still finds the excluded notes,
+  and their written wikilinks stay on the graph. Until you edit the field it
+  follows your Daily notes folder automatically, so the common case needs no
+  setup; clear it to exclude nothing.
 
 ## Develop
 

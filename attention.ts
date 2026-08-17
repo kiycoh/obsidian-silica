@@ -7,7 +7,7 @@
 // No Obsidian import, so `node --test` drives all of it.
 
 import { discriminatingSets, type Corpus } from "./corpus.ts";
-import { TAU, TEMPLATE_TAU, eachPair, jaccard, relatedTo, type Related } from "./correlate.ts";
+import { LIST_TAU, TAU, TEMPLATE_TAU, eachPair, jaccard, relatedTo, type Related } from "./correlate.ts";
 
 /** Obsidian's link tables: source -> target -> count. `unresolved` keys targets
  * by their raw link text, since by definition there is no file to name. */
@@ -96,9 +96,15 @@ export function adoptableOrphans(
 }
 
 /** Notes that overlap this one above the structural bar with no wikilink either
- * way. Uses TAU, not LIST_TAU: proposing a link is a claim, not a suggestion. */
+ * way. Uses TAU, not LIST_TAU: proposing a link is a claim, not a suggestion.
+ *
+ * Out of an excluded note the bar is LIST_TAU instead, because there the claim
+ * is not being made: nobody else's pane, graph or queue can ever show these
+ * rows, so they are a suggestion to the one reader who opened a dashboard and
+ * asked what the vault holds on the day. That reader wants the loose ones — the
+ * tight ones are the notes they already linked on their way in. */
 export function unlinkedNeighbours(corpus: Corpus, links: LinkTables, path: string, limit = 10): Related[] {
-  return relatedTo(corpus, path, Infinity, TAU)
+  return relatedTo(corpus, path, Infinity, corpus.excluded.has(path) ? LIST_TAU : TAU)
     .filter((r) => !isWritten(links, path, r.path))
     .slice(0, limit);
 }

@@ -15,7 +15,7 @@ import {
   type LinkTables,
 } from "./attention.ts";
 import { buildCorpus, discriminatingSets, type CorpusFile, type CorpusVault } from "./corpus.ts";
-import { relatedTo } from "./correlate.ts";
+import { TAU, relatedTo } from "./correlate.ts";
 import { inScope, snippet, splitScope } from "./lexical.ts";
 
 function makeVault(files: Record<string, string>): CorpusVault {
@@ -130,6 +130,34 @@ test("the template gate keeps filler notes out of the link proposals", async () 
   // the template IS their top-30. Nothing may be proposed between them.
   assert.equal(unlinkedNeighbours(corpus, NO_LINKS, "filler-3.md").length, 0);
   assert.equal(adoptableOrphans(corpus, NO_LINKS, "filler-3.md").length, 0);
+});
+
+// A daily note that spent the day on the granite note: three rock words out of
+// eleven stems, which lands at 0.18 — over the suggestion bar, under the
+// structural one. The whole vault is four notes, so no DF share culls anything
+// and the template gate is not what is being measured here.
+const DIARY = "gratitude mood tracker inbox standup sleeping exercise weather";
+const DASHBOARD_VAULT: Record<string, string> = {
+  "journal/2026-08-01.md": `${DIARY} granite basalt quartz`,
+  "geo/granite.md": "granite basalt quartz mineral crystal sediment stratum erosion intrusion",
+  "geo/basalt.md": "granite basalt quartz mineral crystal sediment stratum erosion flow",
+  "geo/quartz.md": "granite basalt quartz mineral crystal sediment stratum erosion vein",
+};
+
+test("a proposal out of an excluded note answers to the suggestion bar", async () => {
+  const day = "journal/2026-08-01.md";
+  const vault = makeVault(DASHBOARD_VAULT);
+  // Unexcluded, the note is held to the structural bar and has nothing to say.
+  assert.equal(unlinkedNeighbours(await buildCorpus(vault), NO_LINKS, day).length, 0);
+
+  const corpus = await buildCorpus(vault, null, ["journal"]);
+  const rows = unlinkedNeighbours(corpus, NO_LINKS, day);
+  assert.deepEqual(rows.map((r) => r.path), ["geo/basalt.md", "geo/granite.md", "geo/quartz.md"]);
+  // The bar moved, not the score: these are the rows TAU was rejecting.
+  assert.equal(rows.every((r) => r.score < TAU), true);
+  // A link already written still retires its row, same as anywhere else.
+  const written = { resolved: { [day]: { "geo/granite.md": 1 } }, unresolved: {} };
+  assert.equal(unlinkedNeighbours(corpus, written, day).some((r) => r.path === "geo/granite.md"), false);
 });
 
 test("a written link either way retires the proposal", async () => {
