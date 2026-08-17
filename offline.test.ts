@@ -129,6 +129,56 @@ test("allEdges reports each pair once, both directions folded", async () => {
   assert.equal(edges.every(([a, b]) => a < b), true);
 });
 
+// --- excluded folders -------------------------------------------------------
+
+// The reported bug: journal notes written from a daily template all relate to
+// each other, and when the journals are a minority of the vault no DF share can
+// cull the template stems (measured: at 14% of the vault the DF gate saves
+// nothing). A template is lexically indistinguishable from a topic, so the
+// class is declared by the user, per folder.
+const DIARY = "gratitude mood tracker inbox standup energy sleeping exercise";
+const JOURNALS = {
+  "journal/2026-08-01.md": `${DIARY} walked river garden`,
+  "journal/2026-08-02.md": `${DIARY} ramen downtown salty`,
+  "journal/2026-08-03.md": `${DIARY} bike chain commute`,
+};
+
+test("an excluded folder takes no part in relatedness, in either direction", async () => {
+  const vault = makeVault({ ...FIXTURE, ...JOURNALS, "journal-of-geology.md": `${ROCKS} journal granite` });
+  const raw = await buildCorpus(vault);
+  assert.ok(relatedTo(raw, "journal/2026-08-01.md").length > 0); // the bug, unconfigured
+
+  const corpus = await buildCorpus(vault, null, ["journal"]);
+  assert.deepEqual(relatedTo(corpus, "journal/2026-08-01.md"), []);
+  assert.equal(allEdges(corpus).some(([a, b]) => a.startsWith("journal/") || b.startsWith("journal/")), false);
+  // folder semantics: the prefix is "journal/", not "journal", so a root note
+  // that merely starts with the word is untouched
+  assert.ok(relatedTo(corpus, "journal-of-geology.md").length > 0);
+  // and the rest of the vault is unchanged: the geo notes still find each other
+  // (plus the rock-vocabulary root note, which really is about rocks)
+  assert.deepEqual(
+    relatedTo(corpus, "geo/granite.md").map((r) => r.path).sort(),
+    ["geo/basalt.md", "geo/quartz.md", "journal-of-geology.md"],
+  );
+});
+
+test("excluded notes stay searchable: search is asked for, relatedness is not", async () => {
+  const corpus = await buildCorpus(makeVault({ ...FIXTURE, ...JOURNALS }), null, ["journal"]);
+  assert.ok(bm25(corpus, "gratitude").every((h) => h.path.startsWith("journal/")));
+  assert.ok(bm25(corpus, "gratitude").length === 3);
+});
+
+test("changing the exclude list invalidates the memoised corpus, keeping it does not", async () => {
+  const vault = makeVault({ ...FIXTURE, ...JOURNALS });
+  const first = await buildCorpus(vault, null, []);
+  const second = await buildCorpus(vault, first, ["Journal/"]);
+  assert.notEqual(second, first);
+  assert.deepEqual(relatedTo(second, "journal/2026-08-01.md"), []);
+  assert.equal(second.counts.get("geo/granite.md"), first.counts.get("geo/granite.md")); // rows reused
+  const third = await buildCorpus(vault, second, ["journal"]); // same folder, spelling noise only
+  assert.equal(third, second);
+});
+
 // --- BM25 ------------------------------------------------------------------
 
 test("bm25 ranks the note the term is densest in first", async () => {

@@ -28,6 +28,10 @@ export interface Corpus {
   avgLen: number;
   /** Basename of each indexed path, for result rows that show a title. */
   titles: Map<string, string>;
+  /** Paths that take no part in the pairwise layer (related, edges, attention).
+   * Still indexed: search is asked for, relatedness is inferred, and the whole
+   * point of excluding a journal folder is silencing the inference. */
+  excluded: Set<string>;
   lang: Lang;
 }
 
@@ -154,13 +158,38 @@ export function stemCounts(text: string, lang: Lang): Map<string, number> {
   return out;
 }
 
+/** `exclude` entries to lowercased folder prefixes: "Journal" and "journal/"
+ * both become "journal/", so a root note that merely starts with the word is
+ * untouched. Same prefix-is-what-a-folder-IS call as lexical.ts's Scope. */
+function excludedSet(files: CorpusFile[], exclude: string[]): Set<string> {
+  const prefixes = exclude
+    .map((p) => p.trim().toLowerCase().replace(/^\/+/, "").replace(/\/*$/, "/"))
+    .filter((p) => p !== "/");
+  const out = new Set<string>();
+  if (prefixes.length) {
+    for (const f of files) {
+      const path = f.path.toLowerCase();
+      if (prefixes.some((p) => path.startsWith(p))) out.add(f.path);
+    }
+  }
+  return out;
+}
+
+const sameSet = (a: Set<string>, b: Set<string>): boolean =>
+  a.size === b.size && [...a].every((x) => b.has(x));
+
 /** Rebuild the corpus, re-reading only files whose mtime moved since `prev`.
  * The language is detected once on the first build and then frozen for the life
  * of the corpus: node keys are stems, and re-detecting per note would split a
  * shared term across two stemmers (kernel/recall/cooccurrence.py makes the same
  * call, one stemmer per store). */
-export async function buildCorpus(vault: CorpusVault, prev?: Corpus | null): Promise<Corpus> {
+export async function buildCorpus(
+  vault: CorpusVault,
+  prev?: Corpus | null,
+  exclude: string[] = [],
+): Promise<Corpus> {
   const files = vault.getMarkdownFiles();
+  const excluded = excludedSet(files, exclude);
   const counts = new Map<string, Map<string, number>>();
   const mtimes = new Map<string, number>();
   const titles = new Map<string, string>();
@@ -184,11 +213,14 @@ export async function buildCorpus(vault: CorpusVault, prev?: Corpus | null): Pro
       stale.push(file);
     }
   }
-  // Nothing moved and nothing vanished: hand back the very same object. Every
-  // derived index (top-k sets, discriminating stem sets, the note panel's diff
-  // cache) is memoised on Corpus identity, so returning a fresh-but-equal object
-  // would throw all of them away on every note switch.
-  if (!stale.length && prev && prev.counts.size === files.length) return prev;
+  // Nothing moved, nothing vanished and the exclusion list means the same set of
+  // files: hand back the very same object. Every derived index (top-k sets,
+  // discriminating stem sets, the note panel's diff cache) is memoised on Corpus
+  // identity, so returning a fresh-but-equal object would throw all of them away
+  // on every note switch.
+  if (!stale.length && prev && prev.counts.size === files.length && sameSet(prev.excluded, excluded)) {
+    return prev;
+  }
 
   await Promise.all(
     stale.map(async (file) => {
@@ -211,7 +243,7 @@ export async function buildCorpus(vault: CorpusVault, prev?: Corpus | null): Pro
     lengths.set(path, len);
     total += len;
   }
-  return { counts, mtimes, postings, lengths, avgLen: counts.size ? total / counts.size : 0, titles, lang };
+  return { counts, mtimes, postings, lengths, avgLen: counts.size ? total / counts.size : 0, titles, excluded, lang };
 }
 
 async function readOr(vault: CorpusVault, file: CorpusFile): Promise<string> {

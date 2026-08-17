@@ -60,8 +60,30 @@ const SILICA_ICON_SVG = `
 
 interface SilicaSettings {
   portOverride: string;
+  /** Comma-separated folder prefixes whose notes take no part in relatedness
+   * (related pane, inferred graph edges, attention). Journals are the canonical
+   * case: notes written from a daily template all relate to each other, and no
+   * corpus statistic can tell a template from a topic — only the user can. */
+  excludeFolders: string;
 }
-const DEFAULT_SETTINGS: SilicaSettings = { portOverride: "" };
+const DEFAULT_SETTINGS: SilicaSettings = { portOverride: "", excludeFolders: "" };
+
+/** The Daily notes core plugin's folder, or null when the plugin is off, the
+ * folder is the vault root (excluding the root would exclude everything) or the
+ * unofficial `internalPlugins` surface changed shape — every miss degrades to
+ * "no seed", never a crash. Read so the excludeFolders default can name the one
+ * folder Obsidian already knows holds templated notes. */
+function dailyNotesFolder(app: App): string | null {
+  const internal = (
+    app as unknown as { internalPlugins?: { getEnabledPluginById?: (id: string) => unknown } }
+  ).internalPlugins;
+  const daily = internal?.getEnabledPluginById?.("daily-notes") as
+    | { options?: { folder?: unknown } }
+    | null
+    | undefined;
+  const folder = daily?.options?.folder;
+  return typeof folder === "string" && folder.trim().replace(/^\/+|\/+$/g, "") ? folder.trim() : null;
+}
 
 export default class SilicaBridgePlugin extends Plugin implements DiffHost, IndexHost {
   settings: SilicaSettings = DEFAULT_SETTINGS;
@@ -79,6 +101,14 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
   async onload(): Promise<void> {
     const saved = (await this.loadData()) as Partial<SilicaSettings> | null;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
+    // Until the user touches the field — even to clear it — the exclusion
+    // follows the Daily notes folder: journals are the canonical templated
+    // class, and Obsidian already knows where they live. Not persisted here, so
+    // an untouched setting keeps tracking a moved daily folder; the first
+    // saveSettings after an edit writes the key and ends the seeding.
+    if (saved?.excludeFolders === undefined) {
+      this.settings.excludeFolders = dailyNotesFolder(this.app) ?? "";
+    }
     this.registerView(VIEW_TYPE, (leaf) => new BridgeView(leaf, this));
     this.registerView(RELATED_VIEW, (leaf) => new NoteView(leaf, this));
     this.registerView(GRAPH_VIEW, (leaf) => new GraphView(leaf, this));
@@ -151,7 +181,8 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
   corpus(): Promise<Corpus> {
     if (this.corpusInFlight) return this.corpusInFlight;
     const vault = this.app.vault as unknown as CorpusVault;
-    const build = buildCorpus(vault, this.corpusCache).then(
+    const exclude = this.settings.excludeFolders.split(",").filter((p) => p.trim());
+    const build = buildCorpus(vault, this.corpusCache, exclude).then(
       (c) => {
         this.corpusCache = c;
         this.corpusInFlight = null;
@@ -165,7 +196,7 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
     return (this.corpusInFlight = build);
   }
 
-  private refreshNotePanel(): void {
+  refreshNotePanel(): void {
     for (const leaf of this.app.workspace.getLeavesOfType(RELATED_VIEW)) {
       if (leaf.view instanceof NoteView) void leaf.view.refresh();
     }
@@ -853,6 +884,10 @@ class BridgeView extends ItemView {
 }
 
 const PORT_DESC = "Leave empty to use the port from silica-bridge.json.";
+const EXCLUDE_DESC =
+  "Comma-separated folders whose notes are left out of related notes, the community graph and attention " +
+  "— for journals and other templated notes that would otherwise all relate to each other. Search still finds them. " +
+  "Follows your Daily notes folder until you edit it; clear it to exclude nothing.";
 
 // Declarative settings (Obsidian 1.13+): getSettingDefinitions replaces the
 // deprecated display(); getControlValue/setControlValue bind keys to our store.
@@ -873,6 +908,11 @@ class SilicaSettingTab extends PluginSettingTab {
         desc: PORT_DESC,
         control: { type: "text", key: "portOverride", placeholder: "Auto" },
       },
+      {
+        name: "Excluded folders",
+        desc: EXCLUDE_DESC,
+        control: { type: "text", key: "excludeFolders", placeholder: "journal, daily" },
+      },
     ];
   }
 
@@ -890,6 +930,15 @@ class SilicaSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.portOverride)
           .onChange((value) => void this.setControlValue("portOverride", value)),
       );
+    new Setting(this.containerEl)
+      .setName("Excluded folders")
+      .setDesc(EXCLUDE_DESC)
+      .addText((text) =>
+        text
+          .setPlaceholder("journal, daily")
+          .setValue(this.plugin.settings.excludeFolders)
+          .onChange((value) => void this.setControlValue("excludeFolders", value)),
+      );
   }
 
   private statusDesc(): string {
@@ -897,13 +946,20 @@ class SilicaSettingTab extends PluginSettingTab {
   }
 
   getControlValue(key: string): unknown {
-    return key === "portOverride" ? this.plugin.settings.portOverride : undefined;
+    if (key === "portOverride") return this.plugin.settings.portOverride;
+    if (key === "excludeFolders") return this.plugin.settings.excludeFolders;
+    return undefined;
   }
 
   async setControlValue(key: string, value: unknown): Promise<void> {
     if (key === "portOverride") {
       this.plugin.settings.portOverride = str(value);
-      await this.plugin.saveSettings();
+    } else if (key === "excludeFolders") {
+      this.plugin.settings.excludeFolders = str(value);
+      this.plugin.refreshNotePanel(); // the pane behind the modal reflects the change now
+    } else {
+      return;
     }
+    await this.plugin.saveSettings();
   }
 }

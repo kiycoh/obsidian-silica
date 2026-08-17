@@ -118,6 +118,14 @@ terminal is reviewable in the same place.
 
 - **Port override**: leave empty to use the port from `silica-bridge.json`. Set
   it only when you run the agent on a non-default port.
+- **Excluded folders**: comma-separated folders whose notes are left out of
+  related notes, the community graph and attention. Made for journals and other
+  templated notes: notes written from the same template share most of their
+  vocabulary, so they all relate to each other, and no statistic can tell a
+  template from a topic — declaring the folder is the fix. Search still finds
+  the excluded notes, and their written wikilinks stay on the graph. Until you
+  edit the field it follows your Daily notes folder automatically, so the
+  common case needs no setup; clear it to exclude nothing.
 
 ## Develop
 
