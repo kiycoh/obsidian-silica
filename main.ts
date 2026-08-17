@@ -15,36 +15,47 @@ const MAX_CHANGED_FILES = 200; // a long /ingest run, not a memory leak
 const MAX_DIFF_LINES = 400; // per expanded file — a 5k-line overwrite must not stall the sidebar
 const CONFIRM_WINDOW = 5000; // ms an armed "Reject all" waits before standing down
 
-/** The plugin's own mark: the hexagonal cell silica crystallises into, which is
- * also six nodes joined by six edges. One vertex is heavier — the note you are
- * standing on.
+/** The plugin's own mark, and the same one the agent, the README banner and the
+ * site now carry: a hexagonal cell with six nodes inside it, joined to a centre
+ * by six curved arms that all lean the same way.
  *
- * Drawn on Obsidian's 0 0 100 100 icon grid. The numbers were picked against a
- * render of the mark beside lucide's own glyphs at 16/18/24/64px, not by eye on
- * one big copy:
+ * Derived from silica-agent's assets/silica-mark-favicon.svg rather than drawn
+ * again, so the two cannot drift: scale every coordinate by 100/512 onto
+ * Obsidian's icon grid, drop the gradient and the nested-ring moire, and swap
+ * the fills for currentColor. Redo exactly that when the mark changes.
  *
- *   stroke 6.5  — a heavier ring closed the hexagon's hole at 16px and the mark
- *                 turned into a blob; this reads lighter than lucide's stroke
- *                 but the six filled discs put the mass back.
- *   r 8 / 14    — the accent vertex is a bigger disc, not a ring. At the 16px a
- *                 view tab renders, a ring's hole is under a pixel and mushes,
- *                 while a size step survives every scale.
- *   centre 52.5 — the accent disc hangs off the top vertex, so geometric centre
- *                 is not optical centre; the whole figure drops 2.5 to put the
- *                 ink in the middle of the box.
+ * What is not a straight port is the ink, and it was picked against renders at
+ * 16/18/20/24/48px, which is where a ribbon and a view tab actually live:
+ *
+ *   stroke 6 / 5.5  — the source's own weights land near 2 on this grid, which
+ *                     is a hairline at 18px and reads lighter than every lucide
+ *                     glyph beside it.
+ *   r 4             — the nodes carry the mass, but at r 4.6 they touched the
+ *                     arms at 16px and the middle closed into a blob.
+ *   the moire       — eight nested rings render as a halo, not as rings, at any
+ *                     size a tab or a ribbon gives them.
  */
 const SILICA_ICON = "silica-lattice";
 const SILICA_ICON_SVG = `
-<g fill="none" stroke="currentColor" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M88 52.5 L69 19.6 L31 19.6 L12 52.5 L31 85.4 L69 85.4 Z" />
+<g fill="none" stroke="currentColor" stroke-width="6" stroke-linejoin="round">
+  <path d="M93 46.1Q95.3 50 93 53.9L74.9 85.3Q72.7 89.2 68.1 89.2L31.9 89.2Q27.3 89.2 25.1 85.3L7 53.9Q4.7 50 7 46.1L25.1 14.7Q27.3 10.8 31.9 10.8L68.1 10.8Q72.7 10.8 74.9 14.7Z" />
+</g>
+<g fill="none" stroke="currentColor" stroke-width="5.5" stroke-linecap="round">
+  <path d="M53 55 Q55.2 58.5 60.9 60.9" />
+  <path d="M47.2 55.1 Q45.3 58.7 46 64.8" />
+  <path d="M44.1 50.1 Q40.1 50.2 35.1 53.9" />
+  <path d="M47 45 Q44.8 41.5 39.1 39.1" />
+  <path d="M52.8 44.9 Q54.7 41.3 54 35.2" />
+  <path d="M55.9 49.9 Q59.9 49.8 64.9 46.1" />
 </g>
 <g fill="currentColor">
-  <circle cx="88" cy="52.5" r="8" />
-  <circle cx="69" cy="19.6" r="8" />
-  <circle cx="12" cy="52.5" r="8" />
-  <circle cx="31" cy="85.4" r="8" />
-  <circle cx="69" cy="85.4" r="8" />
-  <circle cx="31" cy="19.6" r="14" />
+  <circle cx="64.3" cy="62.4" r="4" />
+  <circle cx="46.4" cy="68.5" r="4" />
+  <circle cx="32.2" cy="56.2" r="4" />
+  <circle cx="35.7" cy="37.6" r="4" />
+  <circle cx="53.6" cy="31.5" r="4" />
+  <circle cx="67.8" cy="43.8" r="4" />
+  <path d="M53.1 54.3Q52.4 55.4 51.1 55.2L47.8 54.9Q46.6 54.7 46 53.6L44.7 50.6Q44.2 49.4 44.9 48.3L46.9 45.7Q47.6 44.6 48.9 44.8L52.2 45.1Q53.4 45.3 54 46.4L55.3 49.4Q55.8 50.6 55.1 51.7Z" />
 </g>`;
 
 interface SilicaSettings {
