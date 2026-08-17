@@ -7,7 +7,6 @@ import {
   adoptableOrphans,
   attentionQueue,
   danglingLinks,
-  discriminatingSets,
   inDegrees,
   nearDuplicates,
   noteSignals,
@@ -15,7 +14,7 @@ import {
   unlinkedNeighbours,
   type LinkTables,
 } from "./attention.ts";
-import { buildCorpus, type CorpusFile, type CorpusVault } from "./corpus.ts";
+import { buildCorpus, discriminatingSets, type CorpusFile, type CorpusVault } from "./corpus.ts";
 import { inScope, snippet, splitScope } from "./lexical.ts";
 
 function makeVault(files: Record<string, string>): CorpusVault {

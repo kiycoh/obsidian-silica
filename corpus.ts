@@ -246,6 +246,47 @@ export async function buildCorpus(
   return { counts, mtimes, postings, lengths, avgLen: counts.size ? total / counts.size : 0, titles, excluded, lang };
 }
 
+// --- Discriminating stem sets ----------------------------------------------
+
+/** A stem in more than this share of the vault discriminates nothing. This is
+ * what keeps daily-note and meeting-template boilerplate out of the pairwise
+ * layer: the false positives that matter are structural, so they die in the
+ * algorithm rather than behind a dismiss button nobody maintains. */
+export const DF_MAX = 0.25;
+/** Below this the vault is too small for a share to mean anything, and below
+ * DF_MIN_DOCS a stem is rare whatever the share says. */
+const DF_MIN_NOTES = 20;
+const DF_MIN_DOCS = 3;
+
+const setCache = new WeakMap<Corpus, Map<string, Set<string>>>();
+
+/** Each note's whole stem set minus the stems too common in this vault to tell
+ * anything apart. Memoised per Corpus object; buildCorpus returns a fresh one on
+ * every refresh, which is exactly the invalidation.
+ *
+ * Lives here rather than next to its callers because it is one more derivation
+ * of `postings`, and both layers above (correlate's template gate, attention's
+ * duplicate and stale sweeps) need the same one. */
+export function discriminatingSets(corpus: Corpus): Map<string, Set<string>> {
+  const hit = setCache.get(corpus);
+  if (hit) return hit;
+  const n = corpus.counts.size;
+  const common = new Set<string>();
+  if (n >= DF_MIN_NOTES) {
+    for (const [stem, byPath] of corpus.postings) {
+      if (byPath.size >= DF_MIN_DOCS && byPath.size / n > DF_MAX) common.add(stem);
+    }
+  }
+  const sets = new Map<string, Set<string>>();
+  for (const [path, row] of corpus.counts) {
+    const set = new Set<string>();
+    for (const stem of row.keys()) if (!common.has(stem)) set.add(stem);
+    sets.set(path, set);
+  }
+  setCache.set(corpus, sets);
+  return sets;
+}
+
 async function readOr(vault: CorpusVault, file: CorpusFile): Promise<string> {
   try {
     return await vault.cachedRead(file);
