@@ -53,10 +53,13 @@ Except for autolink, which you ask for, none of this writes to your vault.
 
 Notes written from a template are what breaks this kind of tool: a vault of daily
 notes shares its scaffolding across every file, so a naive overlap relates all of
-them to all of them. Every proposal here is therefore gated on the overlap that
-survives dropping the stems more than a quarter of the vault carries. That kills
-the whole class in the algorithm, which is why there is no list of dismissed
-suggestions to maintain.
+them to all of them. Every pair here is therefore gated on the overlap that
+survives dropping the stems more than a quarter of the vault carries — the
+related list and the graph edges, not only the proposals. That kills the whole
+class in the algorithm, which is why there is no list of dismissed suggestions to
+maintain. It works while the templated notes are numerous enough for their
+scaffolding to cross that quarter; below it, name the folder under *Excluded
+folders*.
 
 None of these calls a language model, and the quality ceiling says so: the
 stemmer is a light suffix stripper for English and Italian rather than Snowball,
@@ -118,14 +121,20 @@ terminal is reviewable in the same place.
 
 - **Port override**: leave empty to use the port from `silica-bridge.json`. Set
   it only when you run the agent on a non-default port.
-- **Excluded folders**: comma-separated folders whose notes are left out of
-  related notes, the community graph and attention. Made for journals and other
-  templated notes: notes written from the same template share most of their
-  vocabulary, so they all relate to each other, and no statistic can tell a
-  template from a topic — declaring the folder is the fix. Search still finds
-  the excluded notes, and their written wikilinks stay on the graph. Until you
-  edit the field it follows your Daily notes folder automatically, so the
-  common case needs no setup; clear it to exclude nothing.
+- **Excluded folders**: comma-separated folders that read the vault without the
+  vault reading them. An excluded note never shows up in anyone else's related
+  notes, never draws an inferred edge on the community graph and never files a
+  row in attention — but its own related pane still works, so a daily note goes
+  on suggesting what the vault holds on what you wrote today, and two excluded
+  notes can never relate to each other. Made for journals and other templated
+  notes: notes written from the same template share most of their vocabulary, so
+  they all relate to each other. Stems the whole vault uses are dropped from the
+  comparison automatically, which handles a big templated class on its own; below
+  about a quarter of the vault that share is too small to cull anything, and
+  declaring the folder is the fix. Search still finds the excluded notes, and
+  their written wikilinks stay on the graph. Until you edit the field it follows
+  your Daily notes folder automatically, so the common case needs no setup; clear
+  it to exclude nothing.
 
 ## Develop
 

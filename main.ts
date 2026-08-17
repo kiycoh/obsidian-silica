@@ -60,10 +60,12 @@ const SILICA_ICON_SVG = `
 
 interface SilicaSettings {
   portOverride: string;
-  /** Comma-separated folder prefixes whose notes take no part in relatedness
-   * (related pane, inferred graph edges, attention). Journals are the canonical
-   * case: notes written from a daily template all relate to each other, and no
-   * corpus statistic can tell a template from a topic — only the user can. */
+  /** Comma-separated folder prefixes whose notes nobody else's pane, graph or
+   * queue ever has to hear about — while their own pane still reads the vault.
+   * Journals are the canonical case: notes written from a daily template all
+   * relate to each other, no corpus statistic can tell a template from a topic
+   * when they are a minority of the vault, and a daily note is a dashboard, so
+   * the direction that matters is the one it points outwards. */
   excludeFolders: string;
 }
 const DEFAULT_SETTINGS: SilicaSettings = { portOverride: "", excludeFolders: "" };
@@ -885,8 +887,9 @@ class BridgeView extends ItemView {
 
 const PORT_DESC = "Leave empty to use the port from silica-bridge.json.";
 const EXCLUDE_DESC =
-  "Comma-separated folders whose notes are left out of related notes, the community graph and attention " +
-  "— for journals and other templated notes that would otherwise all relate to each other. Search still finds them. " +
+  "Comma-separated folders whose notes stay out of everyone else's related notes, community graph and attention " +
+  "— for journals and other templated notes that would otherwise all relate to each other. Their own related pane " +
+  "still works, so a daily note keeps suggesting what the vault holds on what you wrote. Search still finds them. " +
   "Follows your Daily notes folder until you edit it; clear it to exclude nothing.";
 
 // Declarative settings (Obsidian 1.13+): getSettingDefinitions replaces the

@@ -7,7 +7,7 @@
 // No Obsidian import, so `node --test` drives all of it.
 
 import { discriminatingSets, type Corpus } from "./corpus.ts";
-import { TAU, eachPair, jaccard, relatedTo, type Related } from "./correlate.ts";
+import { TAU, TEMPLATE_TAU, eachPair, jaccard, relatedTo, type Related } from "./correlate.ts";
 
 /** Obsidian's link tables: source -> target -> count. `unresolved` keys targets
  * by their raw link text, since by definition there is no file to name. */
@@ -55,17 +55,12 @@ export function inDegrees(links: LinkTables): Map<string, number> {
 const isWritten = (links: LinkTables, a: string, b: string): boolean =>
   Boolean(links.resolved[a]?.[b] || links.resolved[b]?.[a]);
 
-/** Overlap of two notes once the vault's ubiquitous stems are gone.
- *
- * Every proposal below is gated on this as well as on the top-k score, because
- * the top-30 of a note written from a template IS the template: on a vault of
- * daily notes, raw CORRELATE relates every note to every other at 0.7 and the
- * queue would propose a link between each pair of them. The gate costs one
- * Jaccard and drops that whole class. */
-const survivesTemplate = (sets: Map<string, Set<string>>, a: string, b: string): boolean =>
-  jaccard(sets.get(a) ?? EMPTY, sets.get(b) ?? EMPTY) >= ORPHAN_TAU;
-
 // --- Per-note signals ------------------------------------------------------
+//
+// Every proposal here starts from relatedTo, which carries correlate's template
+// gate: the top-30 of a note written from a template IS the template, and on a
+// vault of daily notes raw CORRELATE relates every note to every other at 0.7.
+// Nothing below has to re-check that — it cannot reach a pair the gate dropped.
 
 /** Near-duplicates of one note. Whole discriminating sets, high bar; candidates
  * still come from the top-k inverted index, because two notes near enough to be
@@ -93,20 +88,18 @@ export function adoptableOrphans(
   tau = ORPHAN_TAU,
 ): Related[] {
   const deg = inDegrees(links);
-  const sets = discriminatingSets(corpus);
   // A note this one already links has in-degree >= 1, so the link check is the
   // orphan check: no second filter needed.
   return relatedTo(corpus, path, Infinity, tau)
-    .filter((r) => !deg.get(r.path) && survivesTemplate(sets, path, r.path))
+    .filter((r) => !deg.get(r.path))
     .slice(0, limit);
 }
 
 /** Notes that overlap this one above the structural bar with no wikilink either
  * way. Uses TAU, not LIST_TAU: proposing a link is a claim, not a suggestion. */
 export function unlinkedNeighbours(corpus: Corpus, links: LinkTables, path: string, limit = 10): Related[] {
-  const sets = discriminatingSets(corpus);
   return relatedTo(corpus, path, Infinity, TAU)
-    .filter((r) => !isWritten(links, path, r.path) && survivesTemplate(sets, path, r.path))
+    .filter((r) => !isWritten(links, path, r.path))
     .slice(0, limit);
 }
 
@@ -214,7 +207,9 @@ export function attentionQueue(corpus: Corpus, links: LinkTables, limit = 100): 
       bump("duplicates", b, dup);
       return; // a copy is not also a missing link: say the bigger thing once
     }
-    if (isWritten(links, a, b) || dup < ORPHAN_TAU) return; // linked, or template overlap only
+    // The sweep reads eachPair directly rather than relatedTo, so the template
+    // gate is applied here by hand — on `dup`, which is already computed.
+    if (isWritten(links, a, b) || dup < TEMPLATE_TAU) return; // linked, or template overlap only
     if (score >= TAU) {
       bump("missing", a, score);
       bump("missing", b, score);

@@ -138,18 +138,30 @@ test("allEdges reports each pair once, both directions folded", async () => {
 // class is declared by the user, per folder.
 const DIARY = "gratitude mood tracker inbox standup energy sleeping exercise";
 const JOURNALS = {
-  "journal/2026-08-01.md": `${DIARY} walked river garden`,
+  // The first day is the dashboard case: someone worked on the rocks and wrote
+  // the day down. That note has something to be told about the vault.
+  "journal/2026-08-01.md": `${DIARY} granite basalt quartz mineral crystal`,
   "journal/2026-08-02.md": `${DIARY} ramen downtown salty`,
   "journal/2026-08-03.md": `${DIARY} bike chain commute`,
 };
 
-test("an excluded folder takes no part in relatedness, in either direction", async () => {
+test("an excluded folder reads the vault; the vault never reads it", async () => {
   const vault = makeVault({ ...FIXTURE, ...JOURNALS, "journal-of-geology.md": `${ROCKS} journal granite` });
   const raw = await buildCorpus(vault);
-  assert.ok(relatedTo(raw, "journal/2026-08-01.md").length > 0); // the bug, unconfigured
+  // The bug, unconfigured, and the measurement behind the setting: at this share
+  // of the vault the DF gate culls nothing, so the daily template is still what
+  // relates one journal to the next.
+  assert.ok(relatedTo(raw, "journal/2026-08-01.md").some((r) => r.path.startsWith("journal/2")));
 
   const corpus = await buildCorpus(vault, null, ["journal"]);
-  assert.deepEqual(relatedTo(corpus, "journal/2026-08-01.md"), []);
+  const fromJournal = relatedTo(corpus, "journal/2026-08-01.md").map((r) => r.path);
+  // One way: the journal still finds what the vault holds on what it wrote about
+  assert.ok(fromJournal.includes("geo/granite.md"), fromJournal.join());
+  // ...and no journal is ever an answer, to itself or to anyone else.
+  assert.equal(fromJournal.some((p) => p.startsWith("journal/")), false);
+  assert.equal(relatedTo(corpus, "geo/granite.md").some((r) => r.path.startsWith("journal/")), false);
+  // The vault-wide sweeps stay the vault's business: no edge, so no node on the
+  // community graph and no row in the queue.
   assert.equal(allEdges(corpus).some(([a, b]) => a.startsWith("journal/") || b.startsWith("journal/")), false);
   // folder semantics: the prefix is "journal/", not "journal", so a root note
   // that merely starts with the word is untouched
@@ -173,7 +185,9 @@ test("changing the exclude list invalidates the memoised corpus, keeping it does
   const first = await buildCorpus(vault, null, []);
   const second = await buildCorpus(vault, first, ["Journal/"]);
   assert.notEqual(second, first);
-  assert.deepEqual(relatedTo(second, "journal/2026-08-01.md"), []);
+  // The new list took effect: before it, one journal answered for another.
+  assert.ok(relatedTo(first, "journal/2026-08-01.md").some((r) => r.path.startsWith("journal/2")));
+  assert.equal(relatedTo(second, "journal/2026-08-01.md").some((r) => r.path.startsWith("journal/")), false);
   assert.equal(second.counts.get("geo/granite.md"), first.counts.get("geo/granite.md")); // rows reused
   const third = await buildCorpus(vault, second, ["journal"]); // same folder, spelling noise only
   assert.equal(third, second);

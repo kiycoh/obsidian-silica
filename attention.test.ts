@@ -15,6 +15,7 @@ import {
   type LinkTables,
 } from "./attention.ts";
 import { buildCorpus, discriminatingSets, type CorpusFile, type CorpusVault } from "./corpus.ts";
+import { relatedTo } from "./correlate.ts";
 import { inScope, snippet, splitScope } from "./lexical.ts";
 
 function makeVault(files: Record<string, string>): CorpusVault {
@@ -79,6 +80,16 @@ test("the template's own words are dropped from every note's set", async () => {
 test("a small vault keeps every stem: a share means nothing at that size", async () => {
   const sets = discriminatingSets(await corpusOf({ "a.md": BOILER, "b.md": BOILER, "c.md": BOILER }));
   assert.equal(sets.get("a.md")?.has("agenda"), true);
+});
+
+// The gate lives in the pairwise layer, so it holds one step earlier than the
+// proposals below: a templated pair is not a suggestion either, and the edge it
+// would have drawn never reaches Louvain.
+test("the template gate reaches the related list, not only the proposals", async () => {
+  const corpus = await corpusOf(TEMPLATED);
+  assert.deepEqual(relatedTo(corpus, "filler-3.md"), []);
+  // The pair that shares real vocabulary is untouched by it.
+  assert.ok(relatedTo(corpus, "copy-a.md").some((r) => r.path === "copy-b.md"));
 });
 
 // --- near-duplicates -------------------------------------------------------
