@@ -1,6 +1,6 @@
 {
   "name": "silica-bridge",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Silica's graph algorithms on an Obsidian vault: relatedness, near-duplicates, orphans, ranked search, autolinking and communities, with no model.",
   "scripts": {
     "dev": "node esbuild.config.mjs",
