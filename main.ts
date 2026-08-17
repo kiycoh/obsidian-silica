@@ -99,17 +99,23 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
    * disk is a bug class this does not need. */
   private corpusCache: Corpus | null = null;
   private corpusInFlight: Promise<Corpus> | null = null;
+  /** True while `excludeFolders` is the Daily notes seed rather than the
+   * reader's own answer. Kept out of the saved data for exactly as long, so an
+   * unrelated save — the port field is the one that does this — cannot freeze a
+   * value the reader never typed. */
+  private seededExclude = false;
 
   async onload(): Promise<void> {
     const saved = (await this.loadData()) as Partial<SilicaSettings> | null;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
     // Until the user touches the field — even to clear it — the exclusion
     // follows the Daily notes folder: journals are the canonical templated
-    // class, and Obsidian already knows where they live. Not persisted here, so
-    // an untouched setting keeps tracking a moved daily folder; the first
-    // saveSettings after an edit writes the key and ends the seeding.
+    // class, and Obsidian already knows where they live. The seed is never
+    // written back (see saveSettings), so an untouched setting keeps tracking a
+    // moved daily folder; editing the field is what ends the seeding.
     if (saved?.excludeFolders === undefined) {
       this.settings.excludeFolders = dailyNotesFolder(this.app) ?? "";
+      this.seededExclude = true;
     }
     this.registerView(VIEW_TYPE, (leaf) => new BridgeView(leaf, this));
     this.registerView(RELATED_VIEW, (leaf) => new NoteView(leaf, this));
@@ -531,8 +537,19 @@ export default class SilicaBridgePlugin extends Plugin implements DiffHost, Inde
     }
   }
 
+  /** A still-seeded `excludeFolders` is left out of the file rather than written
+   * with its current value: saving is whole-object, so persisting it here would
+   * end the Daily-notes tracking on the day the reader edited the port. */
   async saveSettings(): Promise<void> {
-    await this.saveData(this.settings);
+    const data: Partial<SilicaSettings> = { ...this.settings };
+    if (this.seededExclude) delete data.excludeFolders;
+    await this.saveData(data);
+  }
+
+  /** The reader answered the exclusion question themselves; stop seeding it. */
+  setExcludeFolders(value: string): void {
+    this.settings.excludeFolders = value;
+    this.seededExclude = false;
   }
 }
 
@@ -958,7 +975,7 @@ class SilicaSettingTab extends PluginSettingTab {
     if (key === "portOverride") {
       this.plugin.settings.portOverride = str(value);
     } else if (key === "excludeFolders") {
-      this.plugin.settings.excludeFolders = str(value);
+      this.plugin.setExcludeFolders(str(value));
       this.plugin.refreshNotePanel(); // the pane behind the modal reflects the change now
     } else {
       return;
