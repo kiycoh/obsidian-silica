@@ -198,7 +198,15 @@ export async function buildCorpus(
   if (lang === undefined) {
     // Sample the first few files rather than the whole vault: the classifier
     // saturates long before that and the first build is the slow one.
-    const sample = (await Promise.all(files.slice(0, 8).map((f) => readOr(vault, f)))).join("\n");
+    //
+    // Excluded files are sampled last. The reader has said those notes are not
+    // representative, and a journal is the case that proves it: daily notes are
+    // short, often empty, often written from a downloaded English template, and
+    // they sort first in plenty of vaults — eight of them are enough to index an
+    // Italian vault as English, frozen for the life of the corpus. Last, not
+    // never: a vault that is nothing but journal still has to detect something.
+    const ranked = [...files].sort((a, b) => Number(excluded.has(a.path)) - Number(excluded.has(b.path)));
+    const sample = (await Promise.all(ranked.slice(0, 8).map((f) => readOr(vault, f)))).join("\n");
     lang = detectLang(cleanBody(sample));
   }
 

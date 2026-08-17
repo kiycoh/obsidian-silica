@@ -180,6 +180,24 @@ test("excluded notes stay searchable: search is asked for, relatedness is not", 
   assert.ok(bm25(corpus, "gratitude").length === 3);
 });
 
+test("excluded notes do not get to pick the vault's stemmer", async () => {
+  // An Italian vault whose daily notes came from a downloaded English template
+  // and are mostly empty, sorted first. Eight of them are the whole sample.
+  const tpl = "## Morning\n## What did you do today\n## Notes for tomorrow\n";
+  const files: Record<string, string> = {};
+  for (let i = 1; i <= 8; i++) files[`diario/2026-08-0${i}.md`] = tpl;
+  for (let i = 0; i < 8; i++) {
+    files[`note/nota-${i}.md`] =
+      "Questo documento descrive la gestione delle dipendenze del progetto e le decisioni " +
+      "che sono state prese quando non funzionavano come previsto.";
+  }
+  assert.equal((await buildCorpus(makeVault(files))).lang, "en"); // the bug, unconfigured
+  assert.equal((await buildCorpus(makeVault(files), null, ["diario"])).lang, "it");
+  // Last, not never: a vault that is nothing but journal still detects something.
+  const onlyJournal = Object.fromEntries(Object.entries(files).filter(([p]) => p.startsWith("diario/")));
+  assert.equal((await buildCorpus(makeVault(onlyJournal), null, ["diario"])).lang, "en");
+});
+
 test("changing the exclude list invalidates the memoised corpus, keeping it does not", async () => {
   const vault = makeVault({ ...FIXTURE, ...JOURNALS });
   const first = await buildCorpus(vault, null, []);
