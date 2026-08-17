@@ -30,7 +30,9 @@ from your notes, kept current by mtime and never written to disk.
     orphan is invisible from itself, since you never open it; this is the surface
     that can show you one.
   - *Links without substance*: links written out of this note whose target shares
-    almost no vocabulary with it. Index notes are exempt.
+    almost no vocabulary with it. Index notes are exempt, and so is anything
+    under an excluded folder: a daily note's links are to-dos, about the day and
+    not about the target, which is the same exemption for the same reason.
   - *Broken links*: link text that resolves to no file.
 - **Next**. The button at the top of the panel walks the whole vault worst-first,
   one note per press, and says why each one is there. The four signals are fused
@@ -123,10 +125,14 @@ terminal is reviewable in the same place.
   it only when you run the agent on a non-default port.
 - **Excluded folders**: comma-separated folders that read the vault without the
   vault reading them. An excluded note never shows up in anyone else's related
-  notes, never draws an inferred edge on the community graph and never files a
-  row in attention — but its own related pane still works, so a daily note goes
-  on suggesting what the vault holds on what you wrote today, and two excluded
-  notes can never relate to each other. In that pane the `unlinked` marker
+  notes, never draws an inferred edge on the community graph, never files a row
+  in attention — broken links included, since typing tomorrow's note name today
+  is what a journal is — and never has its own links called substanceless. But
+  its own related pane still works, so a daily note goes on suggesting what the
+  vault holds on what you wrote today, and two excluded notes can never relate
+  to each other. Excluded notes are also sampled last when the vault's language
+  is detected: eight empty days from an English template should not decide the
+  stemmer for an Italian vault. In that pane the `unlinked` marker
   answers to the softer of the two thresholds, since nothing outside it can act
   on the suggestion anyway. Made for journals and other templated notes: notes
   written from the same template share most of their vocabulary, so they all
